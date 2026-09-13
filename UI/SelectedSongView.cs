@@ -207,7 +207,7 @@ namespace BetterSongSearch.UI {
 			BSSFlowCoordinator.Close(true);
 			ReturnToBSS.returnTobss = PluginConfig.Instance.returnToBssFromSolo;
 
-			BeatmapKey key = new BeatmapKey(level.levelID, null, BeatmapDifficulty.Easy);
+			BeatmapKey key = new BeatmapKey(level.levelID, BeatmapCharacteristic.Standard, BeatmapDifficulty.Easy);
 			var keys = level.GetBeatmapKeys();
 
 			// If this fails for some reason, eh whatever. This is just for preselecting a / the matching diff
@@ -219,12 +219,12 @@ namespace BetterSongSearch.UI {
 
 					key = keys.FirstOrDefault(x =>
 						x.difficulty == (BeatmapDifficulty)ddiff.difficulty &&
-						x.beatmapCharacteristic.serializedName == targetChar
+						x.characteristic.SerializedName() == targetChar
 					);
 				} catch { }
 			}
 
-			if(key.beatmapCharacteristic == null)
+			if(string.IsNullOrEmpty(key.levelId))
 				key = level.GetBeatmapKeys().First();
 
 			var x = new LevelSelectionFlowCoordinator.State(

@@ -66,7 +66,7 @@ namespace BetterSongSearch.UI {
 						 */
 						//var maxScore = ScoreModel.MaxRawScoreForNumberOfNotes((int)diff.notes);
 						//h[$"{x.beatmapCharacteristic.serializedName}_{x.difficulty}"] = (x.highScore * 100f) / maxScore;
-						h[$"{x.Key.beatmapCharacteristic.serializedName}_{x.Key.difficulty}"] = 0;
+				h[$"{x.Key.characteristic.SerializedName()}_{x.Key.difficulty}"] = 0;
 					}
 				}
 
