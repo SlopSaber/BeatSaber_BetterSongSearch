@@ -22,7 +22,7 @@ namespace BetterSongSearch.UI.SplitViews {
 		}
 
 
-		[UIParams] readonly BSMLParserParams parserParams = null;
+		[UIParams] private BSMLParserParams parserParams { get; set; }
 
 		public static PluginConfig cfgInstance;
 	}

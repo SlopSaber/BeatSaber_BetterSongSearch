@@ -48,10 +48,10 @@ namespace BetterSongSearch.UI {
 				SetIsDownloaded(selectedSong.CheckIsDownloaded(), selectedSong.CheckIsDownloadable());
 
 			if(soloFreePlayFlowCoordinator == null)
-				soloFreePlayFlowCoordinator = FindObjectOfType<SoloFreePlayFlowCoordinator>();
+				soloFreePlayFlowCoordinator = FindFirstObjectByType<SoloFreePlayFlowCoordinator>();
 
 			if(multiplayerLevelSelectionFlowCoordinator == null)
-				multiplayerLevelSelectionFlowCoordinator = FindObjectOfType<MultiplayerLevelSelectionFlowCoordinator>();
+				multiplayerLevelSelectionFlowCoordinator = FindFirstObjectByType<MultiplayerLevelSelectionFlowCoordinator>();
 		}
 
 		static internal SongPreviewPlayer songPreviewPlayer { get; private set; } = null;

@@ -81,7 +81,7 @@ namespace BetterSongSearch.UI {
 
 			assetLoader ??= new SongAssetAsyncLoader();
 
-			playerDataModel ??= XD.FunnyMono(playerDataModel) ?? UnityEngine.Object.FindObjectOfType<PlayerDataModel>();
+			playerDataModel ??= XD.FunnyMono(playerDataModel) ?? UnityEngine.Object.FindFirstObjectByType<PlayerDataModel>();
 
 			static async Task DataUpdated() {
 				_ = IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => {

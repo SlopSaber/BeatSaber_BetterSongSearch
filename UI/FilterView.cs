@@ -82,7 +82,7 @@ namespace BetterSongSearch.UI {
 				._modalView;
 
 			foreach(var l in GetComponentsInChildren<CurvedTextMeshPro>().Where(x => x.gameObject.name == "Title"))
-				l.enableWordWrapping = false;
+				l.textWrappingMode = TMPro.TextWrappingModes.NoWrap;
 				
 
 			((RectTransform)m.transform).pivot = new Vector2(0.5f, 0.3f);
