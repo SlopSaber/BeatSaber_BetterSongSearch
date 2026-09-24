@@ -36,7 +36,7 @@ namespace BetterSongSearch {
 
 		[OnExit]
 		public void OnApplicationQuit() {
-
+			UI.BSSFlowCoordinator.DisposeSongCoreSubscription();
 		}
 	}
 }

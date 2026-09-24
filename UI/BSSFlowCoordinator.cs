@@ -1,6 +1,7 @@
 ﻿using BeatSaberMarkupLanguage;
 using BetterSongSearch.Util;
 using HMUI;
+using Legato;
 using SongDetailsCache;
 using System;
 using System.Collections.Generic;
@@ -19,6 +20,12 @@ namespace BetterSongSearch.UI {
 		static internal SongDetails songDetails = null;
 
 		static BSSFlowCoordinator instance = null;
+		static IDisposable songLoadedSubscription;
+
+		internal static void DisposeSongCoreSubscription() {
+			songLoadedSubscription?.Dispose();
+			songLoadedSubscription = null;
+		}
 
 		public static CancellationTokenSource closeCancelSource;
 
@@ -111,7 +118,7 @@ namespace BetterSongSearch.UI {
 
 				ProvideInitialViewControllers(songListView, filterView, downloadHistoryView);
 
-				SongCore.Loader.SongsLoadedEvent += SongcoreSongsLoaded;
+				songLoadedSubscription = SongCoreLoaderEvents.SubscribeToSongsLoaded(SongcoreSongsLoaded);
 				SongDetailsContainer.dataAvailableOrUpdated += () => _ = DataUpdated();
 
 				BeatSaverRegionManager.RegionLookup();
@@ -125,7 +132,7 @@ namespace BetterSongSearch.UI {
 				downloadHistoryView.RefreshTable();
 		}
 
-		void SongcoreSongsLoaded(object a, object b) {
+		void SongcoreSongsLoaded() {
 			foreach(var x in downloadHistoryView.downloadList)
 				if(x.status == DownloadHistoryEntry.DownloadStatus.Downloaded)
 					x.status = DownloadHistoryEntry.DownloadStatus.Loaded;
