@@ -1,4 +1,4 @@
-﻿using BeatSaberMarkupLanguage;
+using BeatSaberMarkupLanguage;
 using BeatSaberMarkupLanguage.Attributes;
 using BeatSaberMarkupLanguage.Components;
 using BeatSaberMarkupLanguage.Components.Settings;
@@ -157,7 +157,7 @@ namespace BetterSongSearch.UI {
 
 
 		#region filters
-		static bool requiresScore => (currentFilter.existingScore == (string)FilterOptions.scoreFilterOptions[2]) || SongListController.selectedSortMode == "Worst local score";
+		static bool RequiresScore(FilterOptions filter, string sortMode) => filter.existingScore == (string)FilterOptions.scoreFilterOptions[2] || sortMode == "Worst local score";
 
 		static readonly IReadOnlyDictionary<object, MapMods> funnyMapThing = Enumerable.Range(0, 5)
 			.ToDictionary(x => FilterOptions.modOptions[x + 1], x => (MapMods)(1 << x));
@@ -165,18 +165,19 @@ namespace BetterSongSearch.UI {
 		static readonly IReadOnlyDictionary<string, RankedStates> funnyMapThing2 = Enumerable.Range(0, 4)
 			.ToDictionary(x => (string)FilterOptions.rankedFilterOptions[x + 1], x => (RankedStates)(1 << x));
 
-		public bool DifficultyCheck(in SongDifficulty diff) {
-			if(currentFilter.difficulty_int != -1 && currentFilter.difficulty_int != (int)diff.difficulty)
+		public bool DifficultyCheck(in SongDifficulty diff, FilterOptions options = null, string sortMode = null) {
+			var filter = options ?? currentFilter;
+			if(filter.difficulty_int != -1 && filter.difficulty_int != (int)diff.difficulty)
 				return false;
 
-			if(currentFilter.characteristic_int != -1 && currentFilter.characteristic_int != (int)diff.characteristic)
+			if(filter.characteristic_int != -1 && filter.characteristic_int != (int)diff.characteristic)
 				return false;
 
-			if(diff.njs < currentFilter.minimumNjs || diff.njs > currentFilter.maximumNjs)
+			if(diff.njs < filter.minimumNjs || diff.njs > filter.maximumNjs)
 				return false;
 
-			if(currentFilter.rankedState != (string)FilterOptions.rankedFilterOptions[0]) {
-				var state = funnyMapThing2[currentFilter.rankedState];
+			if(filter.rankedState != (string)FilterOptions.rankedFilterOptions[0]) {
+				var state = funnyMapThing2[filter.rankedState];
 
 				if(state == RankedStates.ScoresaberRanked && diff.stars == 0)
 					return false;
@@ -185,53 +186,55 @@ namespace BetterSongSearch.UI {
 					return false;
 			}
 
-			if(currentFilter.mods != (string)FilterOptions.modOptions[0]) {
-				if((diff.mods & funnyMapThing[currentFilter.mods]) == 0)
+			if(filter.mods != (string)FilterOptions.modOptions[0]) {
+				if((diff.mods & funnyMapThing[filter.mods]) == 0)
 					return false;
 			}
 
 			if(diff.song.songDurationSeconds > 0) {
 				var nps = diff.notes / (float)diff.song.songDurationSeconds;
 
-				if(nps < currentFilter.minimumNps || nps > currentFilter.maximumNps)
+				if(nps < filter.minimumNps || nps > filter.maximumNps)
 					return false;
 			}
 
 			return true;
 		}
 
-		public bool SearchDifficultyCheck(SongSearchSong.SongSearchDiff diff) {
-			if(currentFilter.existingScore != (string)FilterOptions.scoreFilterOptions[0] || requiresScore) {
-				if(diff.CheckHasScore() != requiresScore)
+		public bool SearchDifficultyCheck(SongSearchSong.SongSearchDiff diff, FilterOptions options = null, string sortMode = null) {
+			var filter = options ?? currentFilter;
+			if(filter.existingScore != (string)FilterOptions.scoreFilterOptions[0] || RequiresScore(filter, sortMode ?? SongListController.selectedSortMode)) {
+				if(diff.CheckHasScore() != RequiresScore(filter, sortMode ?? SongListController.selectedSortMode))
 					return false;
 			}
 
 			var star = -1f;
 
-			if(currentFilter.maximumStars != FilterOptions.STAR_FILTER_MAX) {
-				star = diff.GetStars();
+			if(filter.maximumStars != float.MaxValue) {
+				star = diff.GetStarsForRankedState(filter.rankedState);
 
-				if(star > currentFilter.maximumStars)
+				if(star > filter.maximumStars)
 					return false;
 			}
 
-			if(currentFilter.minimumStars != 0f) {
+			if(filter.minimumStars != 0f) {
 				if(star == -1)
-					star = diff.GetStars();
+					star = diff.GetStarsForRankedState(filter.rankedState);
 
-				if(star < currentFilter.minimumStars)
+				if(star < filter.minimumStars)
 					return false;
 			}
 
 			return true;
 		}
 
-		public bool SongCheck(in Song song) {
-			if(song.uploadTime < currentFilter.hideOlderThan)
+		public bool SongCheck(in Song song, FilterOptions options = null, string sortMode = null) {
+			var filter = options ?? currentFilter;
+			if(song.uploadTime < filter.hideOlderThan)
 				return false;
 
-			if(currentFilter.rankedState != (string)FilterOptions.rankedFilterOptions[0]) {
-				if(!song.rankedStates.HasFlag(funnyMapThing2[currentFilter.rankedState]))
+			if(filter.rankedState != (string)FilterOptions.rankedFilterOptions[0]) {
+				if(!song.rankedStates.HasFlag(funnyMapThing2[filter.rankedState]))
 					return false;
 			}
 
@@ -240,52 +243,53 @@ namespace BetterSongSearch.UI {
 			if(song.songDurationSeconds > 0f) {
 				var x = song.songDurationSeconds * oneSixtythInverse;
 
-				if(x < currentFilter.minimumSongLength || x > currentFilter.maximumSongLength)
+				if(x < filter.minimumSongLength || x > filter.maximumSongLength)
 					return false;
 			}
 
 			var voteCount = song.downvotes + song.upvotes;
 
-			if(voteCount < currentFilter.minimumVotes)
+			if(voteCount < filter.minimumVotes)
 				return false;
 
-			if(currentFilter.minimumRating > 0f && (currentFilter.minimumRating > song.rating || voteCount == 0))
+			if(filter.minimumRating > 0f && (filter.minimumRating > song.rating || voteCount == 0))
 				return false;
 
-			if(currentFilter.onlyCuratedMaps && (song.uploadFlags & UploadFlags.Curated) == 0)
+			if(filter.onlyCuratedMaps && (song.uploadFlags & UploadFlags.Curated) == 0)
 				return false;
 
-			if(currentFilter.onlyVerifiedMappers && (song.uploadFlags & UploadFlags.VerifiedUploader) == 0)
+			if(filter.onlyVerifiedMappers && (song.uploadFlags & UploadFlags.VerifiedUploader) == 0)
 				return false;
 
-			if(currentFilter._mapStyleBitfield != 0 && (song.tags & currentFilter._mapStyleBitfield) == 0)
+			if(filter._mapStyleBitfield != 0 && (song.tags & filter._mapStyleBitfield) == 0)
 				return false;
 
-			if(currentFilter._mapGenreBitfield != 0 && (song.tags & currentFilter._mapGenreBitfield) == 0)
+			if(filter._mapGenreBitfield != 0 && (song.tags & filter._mapGenreBitfield) == 0)
 				return false;
 
-			if((song.tags & currentFilter._mapGenreExcludeBitfield) != 0)
+			if((song.tags & filter._mapGenreExcludeBitfield) != 0)
 				return false;
 
 			return true;
 		}
 
-		public bool SearchSongCheck(SongSearchSong song) {
-			if(currentFilter.existingSongs != (string)FilterOptions.downloadedFilterOptions[0]) {
-				if(SongCore.Collections.songWithHashPresent(song.hash) == (currentFilter.existingSongs == (string)FilterOptions.downloadedFilterOptions[2]))
+		public bool SearchSongCheck(SongSearchSong song, FilterOptions options = null, string sortMode = null) {
+			var filter = options ?? currentFilter;
+			if(filter.existingSongs != (string)FilterOptions.downloadedFilterOptions[0]) {
+				if(SongCore.Collections.songWithHashPresent(song.hash) == (filter.existingSongs == (string)FilterOptions.downloadedFilterOptions[2]))
 					return false;
 			}
 
-			if(currentFilter.existingScore != (string)FilterOptions.scoreFilterOptions[0] || requiresScore) {
-				if(song.CheckHasScore() != requiresScore)
+			if(filter.existingScore != (string)FilterOptions.scoreFilterOptions[0] || RequiresScore(filter, sortMode ?? SongListController.selectedSortMode)) {
+				if(song.CheckHasScore() != RequiresScore(filter, sortMode ?? SongListController.selectedSortMode))
 					return false;
 			}
 
-			if(currentFilter.uploaders.Count != 0) {
-				if(currentFilter.uploaders.Contains(song.uploaderNameLowercase)) {
-					if(currentFilter.uploadersBlacklist)
+			if(filter.uploaders.Count != 0) {
+				if(filter.uploaders.Contains(song.uploaderNameLowercase)) {
+					if(filter.uploadersBlacklist)
 						return false;
-				} else if(!currentFilter.uploadersBlacklist) {
+				} else if(!filter.uploadersBlacklist) {
 					return false;
 				}
 			}
@@ -297,14 +301,23 @@ namespace BetterSongSearch.UI {
 
 		[UIComponent("sponsorsText")] CurvedTextMeshPro sponsorsText = null;
 		void OpenSponsorsLink() => Process.Start("https://github.com/sponsors/kinsi55");
+		static Task<string> sponsorTextTask;
+		static async Task<string> FetchSponsors() {
+			try {
+				using(var client = new WebClient())
+					return await client.DownloadStringTaskAsync(new Uri("http://kinsi.me/sponsors/bsout.php"));
+			} catch {
+				return "Failed to load";
+			}
+		}
 		async void OpenSponsorsModal() {
 			sponsorsText.text = "Loading...";
-			var desc = await Task.Run(() => {
-				try {
-					return (new WebClient()).DownloadString("http://kinsi.me/sponsors/bsout.php");
-				} catch { }
-				return "Failed to load";
-			});
+			var request = sponsorTextTask ??= FetchSponsors();
+			var desc = await request;
+			if(desc == "Failed to load" && sponsorTextTask == request)
+				sponsorTextTask = null;
+			if(this == null || sponsorsText == null)
+				return;
 
 			sponsorsText.text = desc;
 			// There is almost certainly a better way to update / correctly set the scrollbar size...

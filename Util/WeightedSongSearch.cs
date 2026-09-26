@@ -1,8 +1,10 @@
 ﻿using BetterSongSearch.UI;
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -14,7 +16,7 @@ namespace BetterSongSearch.Util {
 			public float sortWeight;
 		}
 
-		public static IEnumerable<SongSearchSong> Search(IList<SongSearchSong> inList, string filter, Func<SongSearchSong, float> ordersort) {
+		public static IEnumerable<SongSearchSong> Search(IList<SongSearchSong> inList, string filter, Func<SongSearchSong, float> ordersort, CancellationToken token = default) {
 			var words = filter.ToLowerInvariant().Split((string[])null, StringSplitOptions.RemoveEmptyEntries);
 
 			var possibleSongKey = 0u;
@@ -33,7 +35,7 @@ namespace BetterSongSearch.Util {
 			var maxSearchWeight = 0f;
 			var maxSortWeight = 0f;
 
-			Parallel.ForEach(inList, new ParallelOptions() { MaxDegreeOfParallelism = 5 }, x => {
+			Parallel.ForEach(inList, new ParallelOptions() { MaxDegreeOfParallelism = 5, CancellationToken = token }, x => {
 				var resultWeight = 0;
 				var matchedAuthor = false;
 				var prevMatchIndex = -1;
@@ -155,8 +157,9 @@ namespace BetterSongSearch.Util {
 			if(!prefiltered.Any())
 				return new List<SongSearchSong>();
 
+			token.ThrowIfCancellationRequested();
 			var maxSearchWeightInverse = 1f / maxSearchWeight;
-			var maxSortWeightInverse = 1f / maxSortWeight;
+			var maxSortWeightInverse = maxSortWeight > 0 ? 1f / maxSortWeight : 0f;
 
 			return prefiltered.OrderByDescending((s) => {
 				var searchWeight = s.searchWeight * maxSearchWeightInverse;
@@ -167,20 +170,25 @@ namespace BetterSongSearch.Util {
 
 
 
-		public static Dictionary<string, string> cachedSearchableStrings;
-		static unsafe string MakeStringSearchable(string s) {
-			// Eh whatever
+		public static ConcurrentDictionary<string, string> cachedSearchableStrings;
+		static string MakeStringSearchable(string s) {
 			if(s.Length > 255)
 				return s;
 
-			if(cachedSearchableStrings != null && cachedSearchableStrings.TryGetValue(s, out var _s))
-				return _s ?? s;
+			var cache = cachedSearchableStrings;
+			if(cache == null) {
+				Interlocked.CompareExchange(ref cachedSearchableStrings, new ConcurrentDictionary<string, string>(), null);
+				cache = cachedSearchableStrings;
+			}
+			return cache.GetOrAdd(s, Normalize);
+		}
 
+		static unsafe string Normalize(string s) {
 			var normalizedString = s.Normalize(NormalizationForm.FormD);
 
 			var pos = 0;
 			var modified = false;
-			char* challoc = stackalloc char[s.Length];
+			char* challoc = stackalloc char[normalizedString.Length];
 
 			for(var i = 0; i < normalizedString.Length; i++) {
 				var c = normalizedString[i];
@@ -201,14 +209,10 @@ namespace BetterSongSearch.Util {
 				}
 			}
 
-			cachedSearchableStrings ??= new Dictionary<string, string>(BSSFlowCoordinator.songsList?.Length ?? 69420);
-
-			if(!modified && pos == s.Length) {
-				cachedSearchableStrings[s] = null;
+			if(!modified && pos == s.Length)
 				return s;
-			}
 
-			return cachedSearchableStrings[s] = new string(challoc, 0, pos);
+			return new string(challoc, 0, pos);
 		}
 	}
 }

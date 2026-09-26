@@ -1,4 +1,4 @@
-﻿using BeatSaberMarkupLanguage.Attributes;
+using BeatSaberMarkupLanguage.Attributes;
 using BeatSaberMarkupLanguage.Components;
 using BeatSaberMarkupLanguage.Parser;
 using BeatSaberMarkupLanguage.ViewControllers;
@@ -31,68 +31,86 @@ namespace BetterSongSearch.UI {
 
 
 		RatelimitCoroutine limitedUpdateSearchedSongsList;
-		public void UpdateSearchedSongsList() => StartCoroutine(limitedUpdateSearchedSongsList.CallNextFrame());
-
-		public void _UpdateSearchedSongsList() {
-			if(filteredSongsList == null)
+		int searchRevision;
+		System.Threading.CancellationTokenSource searchSource;
+		public void UpdateSearchedSongsList() {
+			if(BSSFlowCoordinator.isClosing)
 				return;
+			searchRevision++;
+			searchSource?.Cancel();
+			if(searchInProgress != null)
+				searchInProgress.gameObject.SetActive(true);
+			StartCoroutine(limitedUpdateSearchedSongsList.CallNextFrame());
+		}
+		public void CancelSearch() {
+			searchRevision++;
+			searchSource?.Cancel();
+			if(searchInProgress != null)
+				searchInProgress.gameObject.SetActive(false);
+		}
 
-			IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => searchInProgress.gameObject.SetActive(true));
-
-			IEnumerable<SongSearchSong> _newSearchedSongsList;
-
-			if(songSearchInput != null && songSearchInput.text.Length > 0) {
-				_newSearchedSongsList = WeightedSongSearch.Search(filteredSongsList, songSearchInput.text, sortModes[selectedSortMode]);
-			} else {
-				_newSearchedSongsList = filteredSongsList.OrderByDescending(sortModes[selectedSortMode]);
+		public async void _UpdateSearchedSongsList() {
+			if(BSSFlowCoordinator.isClosing)
+				return;
+			var revision = searchRevision;
+			var input = filteredSongsList;
+			var query = songSearchInput?.text ?? string.Empty;
+			var sortMode = sortModes[selectedSortMode];
+			if(input == null || songListData == null) {
+				if(revision == searchRevision && searchInProgress != null)
+					searchInProgress.gameObject.SetActive(false);
+				return;
 			}
 
-			if(songListData == null)
-				return;
+			var source = searchSource = new System.Threading.CancellationTokenSource();
+			var token = source.Token;
+			await BSSFlowCoordinator.dataProcessingSlot.WaitAsync();
+			try {
+				token.ThrowIfCancellationRequested();
+				if(revision != searchRevision || input != filteredSongsList ||
+					BSSFlowCoordinator.searchedSongsListPreallocatedArray == null)
+					return;
 
-			var wasEmpty = searchedSongsList == null;
+				var sorted = await Task.Run(() => query.Length > 0
+					? WeightedSongSearch.Search(input, query, sortMode, token).ToArray()
+					: input.OrderByDescending(song => {
+					token.ThrowIfCancellationRequested();
+					return sortMode(song);
+				}).ToArray(), token);
+				token.ThrowIfCancellationRequested();
+				if(revision != searchRevision || input != filteredSongsList ||
+					BSSFlowCoordinator.searchedSongsListPreallocatedArray == null)
+					return;
 
-#if DEBUG
-			var sw = new System.Diagnostics.Stopwatch();
-			sw.Start();
-#endif
+				var wasEmpty = searchedSongsList == null;
+				Array.Copy(sorted, BSSFlowCoordinator.searchedSongsListPreallocatedArray, sorted.Length);
+				searchedSongsList = new ArraySegment<SongSearchSong>(BSSFlowCoordinator.searchedSongsListPreallocatedArray, 0, sorted.Length);
 
-			var i = 0;
-			foreach(var song in _newSearchedSongsList)
-				BSSFlowCoordinator.searchedSongsListPreallocatedArray[i++] = song;
-
-#if DEBUG
-			if(songSearchInput?.text.Length > 0)
-				Plugin.Log.Info(string.Format("Searching the songs took {0}ms", sw.Elapsed.TotalMilliseconds));
-#endif
-
-			searchedSongsList = new ArraySegment<SongSearchSong>(BSSFlowCoordinator.searchedSongsListPreallocatedArray, 0, i);
-
-			IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => {
 				songList.ReloadData();
-
-				if(BSSFlowCoordinator.songsList.Length == filteredSongsList.Count) {
-					songSearchPlaceholder.text = $"Search by Song, Key, Mapper..";
-				} else {
-					songSearchPlaceholder.text = $"Search {searchedSongsList.Count} songs";
-				}
+				if(songSearchPlaceholder != null)
+					songSearchPlaceholder.text = BSSFlowCoordinator.songsList.Length == input.Count
+						? "Search by Song, Key, Mapper.."
+						: $"Search {searchedSongsList.Count} songs";
 
 				if(selectedSongView.selectedSong == null) {
 					selectedSongView.SetSelectedSong(searchedSongsList.FirstOrDefault(), true);
 				} else {
-					if(wasEmpty) {
-						//selectedSongView.SetSelectedSong(searchedSongsList.FirstOrDefault(x => x.detailsSong.mapId == selectedSongView.selectedSong.detailsSong.mapId), true);
+					if(wasEmpty)
 						songList.ScrollToCellWithIdx(BSSFlowCoordinator.lastVisibleTableRowIdx, TableView.ScrollPositionType.Beginning, false);
-					}
-					// Always un-select in the list to prevent wrong-selections on resorting, etc.
 					songList.ClearSelection();
 				}
-
-
-				searchInProgress.gameObject.SetActive(false);
-			});
+			} catch(OperationCanceledException) when(token.IsCancellationRequested) {
+			} catch(Exception ex) {
+				Plugin.Log.Warn($"Searching songs failed: {ex}");
+			} finally {
+				BSSFlowCoordinator.dataProcessingSlot.Release();
+				if(searchSource == source)
+					searchSource = null;
+				source.Dispose();
+				if(revision == searchRevision && searchInProgress != null)
+					searchInProgress.gameObject.SetActive(false);
+			}
 		}
-
 		[UIAction("UpdateDataAndFilters")] void UpdateDataAndFilters(object _) => StartCoroutine(FilterView.limitedUpdateData.CallNextFrame());
 
 		[UIAction("SelectRandom")]
@@ -107,7 +125,7 @@ namespace BetterSongSearch.UI {
 
 		void Awake() {
 			selectedSongView = gameObject.AddComponent<SelectedSongView>();
-			limitedUpdateSearchedSongsList = new RatelimitCoroutine(() => Task.Run(_UpdateSearchedSongsList), 0.1f);
+			limitedUpdateSearchedSongsList = new RatelimitCoroutine(_UpdateSearchedSongsList, 0.1f);
 		}
 
 		[UIAction("SelectSong")] void _SelectSong(TableView _, int row) => selectedSongView.SetSelectedSong(searchedSongsList[row]);
@@ -163,7 +181,7 @@ namespace BetterSongSearch.UI {
 			((RectTransform)m.transform).pivot = new Vector2(0.5f, 0.83f + (c * 0.011f));
 
 			if(searchedSongsList == null)
-				Task.Run(_UpdateSearchedSongsList);
+				_UpdateSearchedSongsList();
 		}
 
 		public float CellSize(int idx) => PluginConfig.Instance.smallerFontSize ? 11.66f : 14f;

@@ -59,7 +59,7 @@ namespace BetterSongSearch.UI {
 			if(!gameObject.activeInHierarchy)
 				return;
 
-			if(downloadList.Count(x => x.IsInAnyOfStates(DownloadHistoryEntry.DownloadStatus.Preparing | DownloadHistoryEntry.DownloadStatus.Downloading)) >= MAX_PARALLEL_DOWNLOADS) {
+			if(downloadList.Count(x => x.IsInAnyOfStates(DownloadHistoryEntry.DownloadStatus.Preparing | DownloadHistoryEntry.DownloadStatus.Downloading | DownloadHistoryEntry.DownloadStatus.Extracting)) >= MAX_PARALLEL_DOWNLOADS) {
 				if(forceTableReload)
 					RefreshTable(true);
 

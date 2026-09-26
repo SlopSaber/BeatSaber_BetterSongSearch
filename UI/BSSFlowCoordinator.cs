@@ -21,6 +21,10 @@ namespace BetterSongSearch.UI {
 
 		static BSSFlowCoordinator instance = null;
 		static IDisposable songLoadedSubscription;
+		internal static readonly SemaphoreSlim dataProcessingSlot = new SemaphoreSlim(1, 1);
+		static int filterRevision;
+		static int datasetRevision;
+		internal static bool isClosing { get; private set; }
 
 		internal static void DisposeSongCoreSubscription() {
 			songLoadedSubscription?.Dispose();
@@ -83,6 +87,7 @@ namespace BetterSongSearch.UI {
 
 		public async override void DidActivate(bool firstActivation, bool addedToHierarchy, bool screenSystemEnabling) {
 			instance = this;
+			isClosing = false;
 
 			closeCancelSource = new CancellationTokenSource();
 
@@ -91,20 +96,41 @@ namespace BetterSongSearch.UI {
 			playerDataModel ??= XD.FunnyMono(playerDataModel) ?? UnityEngine.Object.FindFirstObjectByType<PlayerDataModel>();
 
 			static async Task DataUpdated() {
+				var revision = Interlocked.Increment(ref datasetRevision);
+				var details = songDetails;
+				if(instance == null || isClosing || details == null)
+					return;
+				await IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => songListView?.CancelSearch());
 				_ = IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => {
-					filterView.datasetInfoLabel?.SetText($"{songDetails.songs.Length} songs in dataset | Newest: {songDetails.songs.Last().uploadTime.ToLocalTime():d\\. MMM yy - HH:mm}");
+					if(revision == datasetRevision && !isClosing && details.songs.Length > 0)
+						filterView?.datasetInfoLabel?.SetText($"{details.songs.Length} songs in dataset | Newest: {details.songs.Last().uploadTime.ToLocalTime():d\\. MMM yy - HH:mm}");
 				});
 
-				await Task.Run(() => {
-					songsList = new SongSearchSong[songDetails.songs.Length];
-					filteredSongsListPreallocatedArray = new SongSearchSong[songsList.Length];
-					searchedSongsListPreallocatedArray = new SongSearchSong[songsList.Length];
+			await dataProcessingSlot.WaitAsync();
+			try {
+				if(revision != datasetRevision || isClosing)
+					return;
+				SongListController.filteredSongsList = null;
+				SongListController.searchedSongsList = null;
+				var nextSongs = await Task.Run(() => {
+					var result = new SongSearchSong[details.songs.Length];
+					for(var i = 0; i < result.Length; i++) {
+						if((i & 255) == 0 && revision != datasetRevision)
+							return null;
+						result[i] = new SongSearchSong(details.songs[i], details);
+					}
+					return result;
+			});
+				if(nextSongs == null || revision != datasetRevision || isClosing)
+					return;
+				songsList = nextSongs;
+				filteredSongsListPreallocatedArray = new SongSearchSong[nextSongs.Length];
+				searchedSongsListPreallocatedArray = new SongSearchSong[nextSongs.Length];
+			} finally {
+				dataProcessingSlot.Release();
+			}
 
-					for(var i = 0; i < songsList.Length; i++)
-						songsList[i] = new SongSearchSong(songDetails.songs[i]);
-				});
-
-				FilterSongs();
+				_ = IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(FilterSongs);
 			};
 
 			if(firstActivation) {
@@ -185,6 +211,11 @@ namespace BetterSongSearch.UI {
 				return;
 
 			cancelConfirmCallback = null;
+			isClosing = true;
+			Interlocked.Increment(ref datasetRevision);
+			Interlocked.Increment(ref filterRevision);
+			closeCancelSource?.Cancel();
+			songListView?.CancelSearch();
 			SelectedSongView.songAssetLoadCanceller?.Cancel();
 			try {
 				XD.FunnyMono(SelectedSongView.songPreviewPlayer)?.CrossfadeToDefault();
@@ -209,6 +240,8 @@ namespace BetterSongSearch.UI {
 				songsWithScoresShouldProbablyUpdate = true;
 				songListView.songList.ReloadData();
 
+				if(songListView?.selectedSongView?.coverImage != null)
+					songListView.selectedSongView.coverImage.sprite = SongCore.Loader.defaultCoverImage;
 				assetLoader?.Dispose();
 				assetLoader = null;
 
@@ -219,29 +252,41 @@ namespace BetterSongSearch.UI {
 		public override void BackButtonWasPressed(ViewController topViewController) => Close();
 
 		public static async void FilterSongs() {
-			if(songDetails == null)
+			var revision = Interlocked.Increment(ref filterRevision);
+			if(isClosing || songDetails == null || songsList == null)
 				return;
+			songListView?.CancelSearch();
 
 #if DEBUG
 			var sw = new System.Diagnostics.Stopwatch();
 			sw.Start();
 #endif
 
-			await Task.Run(() => {
+			await dataProcessingSlot.WaitAsync();
+			try {
+				if(isClosing || revision != filterRevision || songsList == null || filteredSongsListPreallocatedArray == null)
+					return;
+			var sourceSongs = songsList;
+			var sourceDetails = songDetails;
+			var output = filteredSongsListPreallocatedArray;
+			var selectedFilter = FilterView.currentFilter.Clone();
+			selectedFilter.CalculateTagBitfields();
+			var sortMode = SongListController.selectedSortMode;
+			var count = await Task.Run(() => {
 				var sc = 0;
 
-				FilterView.currentFilter.CalculateTagBitfields();
-
 				// Loop through our (custom) songdetails array
-				for(var i = 0; i < songsList.Length; i++) {
+				for(var i = 0; i < sourceSongs.Length; i++) {
+					if((i & 255) == 0 && (revision != filterRevision || isClosing))
+						break;
 					/*
 					 * Since our custom array is recreated whenever songDetails updates we can
 					 * get the song directly by ref from songdetails as the index matches
 					 */
-					ref var val = ref songDetails.songs[i];
+					ref var val = ref sourceDetails.songs[i];
 
 					// Check if the song itself passes the filter
-					if(!filterView.SongCheck(in val) || !filterView.SearchSongCheck(songsList[i]))
+					if(!filterView.SongCheck(in val, selectedFilter) || !filterView.SearchSongCheck(sourceSongs[i], selectedFilter, sortMode))
 						continue;
 
 					var hasAnyValid = false;
@@ -251,12 +296,13 @@ namespace BetterSongSearch.UI {
 					 * for those diffs that we checked we pre-set passesFilter so that it
 					 * doesnt need to get (re)checked later whenever the diffs array is accessed
 					 */
-					var theThing = songsList[i];
+					var theThing = sourceSongs[i];
 
 					for(var iDiff = 0; iDiff < val.diffCount; iDiff++) {
 						var theDiff = theThing.diffs[iDiff];
 
-						theDiff._passesFilter = null;
+						theDiff._passesFilter = filterView.DifficultyCheck(in theDiff.detailsDiff, selectedFilter) &&
+							filterView.SearchDifficultyCheck(theDiff, selectedFilter, sortMode);
 						if(!hasAnyValid)
 							hasAnyValid = theDiff.passesFilter;
 					}
@@ -264,17 +310,26 @@ namespace BetterSongSearch.UI {
 					if(!hasAnyValid)
 						continue;
 
-					filteredSongsListPreallocatedArray[sc++] = theThing;
+					output[sc++] = theThing;
 				}
 
-				SongListController.filteredSongsList = new ArraySegment<SongSearchSong>(filteredSongsListPreallocatedArray, 0, sc);
+				return sc;
 			});
+				if(isClosing || revision != filterRevision || output != filteredSongsListPreallocatedArray)
+					return;
+				SongListController.filteredSongsList = new ArraySegment<SongSearchSong>(output, 0, count);
+			} catch(Exception ex) {
+				Plugin.Log.Warn($"Filtering songs failed: {ex}");
+				return;
+			} finally {
+				dataProcessingSlot.Release();
+			}
 
 #if DEBUG
 			Plugin.Log.Info(string.Format("Filtering the songs took {0}ms", sw.Elapsed.TotalMilliseconds));
 #endif
 
-			songListView.UpdateSearchedSongsList();
+			songListView?.UpdateSearchedSongsList();
 		}
 	}
 }

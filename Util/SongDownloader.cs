@@ -27,16 +27,14 @@ namespace BetterSongSearch.Util {
 			if(dl == null || dl.Length == 0)
 				throw new FileNotFoundException();
 
-			var t = new CancellationTokenSource();
-			token.Register(t.Cancel);
-
+			using(var extractionSource = CancellationTokenSource.CreateLinkedTokenSource(token))
 			using(var s = new MemoryStream(dl)) {
 				entry.status = DownloadHistoryEntry.DownloadStatus.Extracting;
 				progressCb(0);
 
 				var sThread = SynchronizationContext.Current;
 
-				await Task.Run(() => ExtractZip(s, folderName, t.Token, (p) => sThread.Post(_ => progressCb(p), null)));
+				await Task.Run(() => ExtractZip(s, folderName, extractionSource.Token, (p) => sThread.Post(_ => progressCb(p), null)));
 			}
 		}
 
@@ -55,23 +53,30 @@ namespace BetterSongSearch.Util {
 					steps = archive.Entries.Count() * 2;
 
 					foreach(var entry in archive.Entries) {
-						var len = (int)entry.Length;
-
 						// If a file, supposedly, is bigger than that we can assume its malicious
-						if(len > 200_000_000)
+						if(entry.Length > 200_000_000)
 							throw new InvalidDataException();
+						var len = (int)entry.Length;
 
 						// Dont extract directories / sub-files
 						if(entry.FullName.IndexOf('/') == -1) {
 							using(var str = entry.Open()) {
 								var file = Marshal.AllocHGlobal(len);
-								var x = new UnmanagedMemoryStream((byte*)file, len, len, FileAccess.ReadWrite);
-
-								str.CopyTo(x);
-
-								x.Position = 0;
-
-								files[entry.Name] = (file, x);
+								UnmanagedMemoryStream x = null;
+								try {
+									x = new UnmanagedMemoryStream((byte*)file, len, len, FileAccess.ReadWrite);
+									str.CopyTo(x);
+									x.Position = 0;
+									if(files.TryGetValue(entry.Name, out var previous)) {
+										previous.stream.Dispose();
+										Marshal.FreeHGlobal(previous.ptr);
+									}
+									files[entry.Name] = (file, x);
+								} catch {
+									x?.Dispose();
+									Marshal.FreeHGlobal(file);
+									throw;
+								}
 
 								if(entry.Name.Length > longestFileNameLength)
 									longestFileNameLength = entry.Name.Length;
@@ -119,8 +124,10 @@ namespace BetterSongSearch.Util {
 					progressCb((float)++progress / steps);
 				}
 			} finally {
-				foreach(var item in files)
+				foreach(var item in files) {
+					item.Value.stream.Dispose();
 					Marshal.FreeHGlobal(item.Value.ptr);
+				}
 			}
 		}
 	}

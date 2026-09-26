@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using BetterSongSearch.Configuration;
 using BetterSongSearch.UI;
+using SongDetailsCache;
 using SongDetailsCache.Structs;
 using static BetterSongSearch.UI.DownloadHistoryView;
 
@@ -80,13 +81,13 @@ namespace BetterSongSearch.Util {
 
 		public string GetCustomLevelIdString() => CustomLevelLoader.kCustomLevelPrefixId + detailsSong.hash.ToUpperInvariant();
 		public SongSearchDiff GetFirstPassingDifficulty() => sortedDiffs.FirstOrDefault();
-		public SongSearchSong(in Song song) {
+		public SongSearchSong(in Song song, SongDetails details) {
 			detailsSong = song;
 			diffs = new SongSearchDiff[song.diffCount];
 
 			// detailsSong.difficulties has an overhead of creating the ArraySegment - This doesnt 👍;
 			for(var i = 0; i < diffs.Length; i++)
-				diffs[i] = new SongSearchDiff(this, in BSSFlowCoordinator.songDetails.difficulties[i + (int)song.diffOffset]);
+				diffs[i] = new SongSearchDiff(this, in details.difficulties[i + (int)song.diffOffset]);
 		}
 
 		public class SongSearchDiff {
@@ -109,17 +110,18 @@ namespace BetterSongSearch.Util {
 				return retVal;
 			}
 
-			public RankedStates GetTargetedRankLeaderboardService() {
+			public RankedStates GetTargetedRankLeaderboardService(string rankedState = null) {
+				rankedState ??= FilterView.currentFilter.rankedState;
 				var rStates = detailsDiff.song.rankedStates;
 
 				if(rStates.HasFlag(RankedStates.ScoresaberRanked) &&
 					// Not Filtering by BeatLeader ranked
-					FilterView.currentFilter.rankedState != (string)FilterOptions.rankedFilterOptions[2] &&
+					rankedState != (string)FilterOptions.rankedFilterOptions[2] &&
 					(
 						PluginConfig.Instance.preferredLeaderboard != "BeatLeader" ||
 						!rStates.HasFlag(RankedStates.BeatleaderRanked) ||
 						// Filtering by SS ranked
-						FilterView.currentFilter.rankedState == (string)FilterOptions.rankedFilterOptions[1]
+						rankedState == (string)FilterOptions.rankedFilterOptions[1]
 					)
 				)
 					return RankedStates.ScoresaberRanked;
@@ -150,6 +152,7 @@ namespace BetterSongSearch.Util {
 			public string formattedDiffDisplay => $"<color=#{(passesFilter ? "EEE" : "888")}>{GetCombinedShortDiffName()}</color>{GetFormattedRankDisplay()}";
 
 			public float GetStars() => GetStars(GetTargetedRankLeaderboardService());
+			public float GetStarsForRankedState(string rankedState) => GetStars(GetTargetedRankLeaderboardService(rankedState));
 
 			public float GetStars(RankedStates state) {
 				if(state.HasFlag(RankedStates.ScoresaberRanked) && detailsDiff.stars > 0)

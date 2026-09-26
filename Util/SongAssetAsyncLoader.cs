@@ -12,12 +12,17 @@ using UnityEngine;
 
 namespace BetterSongSearch.Util {
 	class SongAssetAsyncLoader : IDisposable {
-		static Dictionary<uint, Sprite> _spriteCache;
-		static Dictionary<uint, AudioClip> _previewCache;
+		const int MaxCoverCache = 32;
+		const int MaxPreviewCache = 16;
+		readonly Dictionary<uint, Sprite> _spriteCache = new Dictionary<uint, Sprite>();
+		readonly Dictionary<uint, AudioClip> _previewCache = new Dictionary<uint, AudioClip>();
+		readonly Queue<uint> _coverOrder = new Queue<uint>();
+		readonly Queue<uint> _previewOrder = new Queue<uint>();
+		bool _disposed;
 
-		public SongAssetAsyncLoader() {
-			_spriteCache ??= new Dictionary<uint, Sprite>();
-			_previewCache ??= new Dictionary<uint, AudioClip>();
+		static void DestroyCover(Sprite sprite) {
+			GameObject.Destroy(sprite.texture);
+			GameObject.Destroy(sprite);
 		}
 
 		async Task<string> ApiRequest(string key, Func<JObject, string> valueGetter, CancellationToken token) {
@@ -57,8 +62,20 @@ namespace BetterSongSearch.Util {
 
 			var cover = await UnityWebrequestWrapper.DownloadSprite(path, token);
 
-			if(cover != null)
-				return _spriteCache[mid] = cover;
+			if(cover != null) {
+				if(token.IsCancellationRequested || _disposed) {
+					DestroyCover(cover);
+					return SongCore.Loader.defaultCoverImage;
+				}
+				_spriteCache[mid] = cover;
+				_coverOrder.Enqueue(mid);
+				while(_coverOrder.Count > MaxCoverCache) {
+					var oldId = _coverOrder.Dequeue();
+					DestroyCover(_spriteCache[oldId]);
+					_spriteCache.Remove(oldId);
+				}
+				return cover;
+			}
 
 			return SongCore.Loader.defaultCoverImage;
 		}
@@ -78,29 +95,40 @@ namespace BetterSongSearch.Util {
 
 			var preview = await UnityWebrequestWrapper.DownloadAudio(path, token, AudioType.MPEG);
 
-			if(preview != null && preview.loadState == AudioDataLoadState.Loaded)
-				return _previewCache[mid] = preview;
+			if(preview != null && preview.loadState == AudioDataLoadState.Loaded) {
+				if(token.IsCancellationRequested || _disposed) {
+					GameObject.Destroy(preview);
+					return null;
+				}
+				_previewCache[mid] = preview;
+				_previewOrder.Enqueue(mid);
+				while(_previewOrder.Count > MaxPreviewCache) {
+					var oldId = _previewOrder.Dequeue();
+					GameObject.Destroy(_previewCache[oldId], 5f);
+					_previewCache.Remove(oldId);
+				}
+				return preview;
+			}
+			if(preview != null)
+				GameObject.Destroy(preview);
 
 			return null;
 		}
 
 		public void Dispose() {
-			foreach(var x in _spriteCache.Keys.ToArray()) {
-				var s = _spriteCache[x];
-
-				if(s == BSSFlowCoordinator.songListView.selectedSongView.coverImage.sprite)
-					continue;
-
-				_spriteCache.Remove(x);
-
+			_disposed = true;
+			foreach(var s in _spriteCache.Values) {
 				GameObject.DestroyImmediate(s.texture);
 				GameObject.DestroyImmediate(s);
 			}
+			_spriteCache.Clear();
+			_coverOrder.Clear();
 
 			foreach(var x in _previewCache.Values)
 				GameObject.Destroy(x);
 
 			_previewCache.Clear();
+			_previewOrder.Clear();
 		}
 	}
 }

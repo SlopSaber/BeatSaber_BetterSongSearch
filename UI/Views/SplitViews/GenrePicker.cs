@@ -31,21 +31,11 @@ namespace BetterSongSearch.UI.SplitViews {
 			[UIComponent("excludeButton")] readonly ClickableText excludeButton = null;
 			[UIComponent("includeButton")] readonly ClickableText includeButton = null;
 
-			public FilterPresetRow(KeyValuePair<string, ulong> tag) {
+			public FilterPresetRow(KeyValuePair<string, ulong> tag, int count) {
 				this.value = tag.Value;
 				this.name = tag.Key;
 
 				this.mappedName = FilterOptions.FormatBeatSaverTag(this.name);
-
-				var count = 0;
-
-				//TODO: This is unoptimized as fuck
-				for(var i = BSSFlowCoordinator.songDetails.songs.Length; i-- > 0;) {
-					ref var song = ref BSSFlowCoordinator.songDetails.songs[i];
-
-					if((song.tags & this.value) != 0)
-						count++;
-				}
 
 				this.mappedName += $" ({count})";
 
@@ -96,10 +86,26 @@ namespace BetterSongSearch.UI.SplitViews {
 
 		[UIComponent("genreList")] readonly CustomCellListTableData genreList = null;
 		internal void Reload() {
+			var tagCounts = new Dictionary<ulong, int>();
+			var songs = BSSFlowCoordinator.songDetails.songs;
+			for(var i = 0; i < songs.Length; i++) {
+				for(var bits = songs[i].tags; bits != 0; bits &= bits - 1) {
+					var bit = bits & (~bits + 1);
+					tagCounts.TryGetValue(bit, out var count);
+					tagCounts[bit] = count + 1;
+				}
+			}
 			genreList.Data = BSSFlowCoordinator.songDetails.tags
 				.Where(x => !FilterOptions.mapStyles.Contains(x.Key))
 				.OrderBy(x => x.Key)
-				.Select(x => new FilterPresetRow(x)).ToList<object>();
+				.Select(x => {
+					if(!tagCounts.TryGetValue(x.Value, out var count) && (x.Value & (x.Value - 1)) != 0) {
+						for(var i = 0; i < songs.Length; i++)
+							if((songs[i].tags & x.Value) != 0)
+								count++;
+					}
+					return new FilterPresetRow(x, count);
+				}).ToList<object>();
 
 			genreList.TableView.ReloadData();
 			genreList.TableView.ClearSelection();

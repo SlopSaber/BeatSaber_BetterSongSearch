@@ -111,27 +111,28 @@ namespace BetterSongSearch.UI {
 			ShowCoverLoader(true);
 
 			songAssetLoadCanceller?.Cancel();
-			songAssetLoadCanceller = new CancellationTokenSource();
+			var source = songAssetLoadCanceller = new CancellationTokenSource();
+			var token = source.Token;
 
 			songPreviewPlayer = XD.FunnyMono(songPreviewPlayer) ?? Resources.FindObjectsOfTypeAll<SongPreviewPlayer>().FirstOrDefault();
 
 			if(!song.CheckIsDownloadedAndLoaded()) {
 				try {
 					XD.FunnyMono(songPreviewPlayer)?.CrossfadeToDefault();
-
-					await Task.WhenAll(new[] {
-						BSSFlowCoordinator.assetLoader.LoadCoverAsync(song.detailsSong, songAssetLoadCanceller.Token).ContinueWith(
-							x => { coverImage.sprite = x.Result; },
-							CancellationToken.None,
-							TaskContinuationOptions.OnlyOnRanToCompletion,
-							TaskScheduler.FromCurrentSynchronizationContext()
-						),
-
-						!PluginConfig.Instance.loadSongPreviews ? Task.FromResult(1) : BSSFlowCoordinator.assetLoader.LoadPreviewAsync(song.detailsSong, songAssetLoadCanceller.Token).ContinueWith(
-							x => { if(x.Result != null && songAssetLoadCanceller?.IsCancellationRequested == false) XD.FunnyMono(songPreviewPlayer)?.CrossfadeTo(x.Result, -5f, 0, x.Result.length, null); },
-							TaskScheduler.FromCurrentSynchronizationContext()
-						)
-					});
+					var coverTask = BSSFlowCoordinator.assetLoader.LoadCoverAsync(song.detailsSong, token);
+					var previewTask = PluginConfig.Instance.loadSongPreviews
+						? BSSFlowCoordinator.assetLoader.LoadPreviewAsync(song.detailsSong, token)
+						: Task.FromResult<AudioClip>(null);
+					try {
+						var cover = await coverTask;
+						if(!token.IsCancellationRequested && songAssetLoadCanceller == source && this != null)
+							coverImage.sprite = cover;
+					} catch { }
+					try {
+						var preview = await previewTask;
+						if(preview != null && !token.IsCancellationRequested && songAssetLoadCanceller == source && this != null)
+							XD.FunnyMono(songPreviewPlayer)?.CrossfadeTo(preview, -5f, 0, preview.length, null);
+					} catch { }
 				} catch { }
 			} else {
 				var h = song.GetCustomLevelIdString();
@@ -139,11 +140,18 @@ namespace BetterSongSearch.UI {
 				var level = SongCore.Loader.BeatmapLevelsModelSO.GetBeatmapLevel(h);
 				try {
 					if(level != null)
-						levelCollectionViewController?.SongPlayerCrossfadeToLevelAsync(level, songAssetLoadCanceller.Token);
-					coverImage.sprite = await SongCore.Loader.CustomLevels.Values.FirstOrDefault(x => x.levelID == h)?.previewMediaData.GetCoverSpriteAsync();
+						levelCollectionViewController?.SongPlayerCrossfadeToLevelAsync(level, token);
+					var cover = await SongCore.Loader.CustomLevels.Values.FirstOrDefault(x => x.levelID == h)?.previewMediaData.GetCoverSpriteAsync();
+					if(!token.IsCancellationRequested && songAssetLoadCanceller == source && this != null)
+						coverImage.sprite = cover;
 				} catch { }
 			}
-			ShowCoverLoader(false);
+			if(songAssetLoadCanceller == source) {
+				songAssetLoadCanceller = null;
+				if(this != null)
+					ShowCoverLoader(false);
+			}
+			source.Dispose();
 		}
 
 		internal void SetIsDownloaded(bool isDownloaded, bool downloadable = true) {

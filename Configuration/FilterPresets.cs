@@ -190,7 +190,11 @@ namespace BetterSongSearch.Configuration {
 		}
 		#endregion
 
-		public FilterOptions Clone() => (FilterOptions)MemberwiseClone();
+		public FilterOptions Clone() {
+			var copy = (FilterOptions)MemberwiseClone();
+			copy.uploaders = new HashSet<string>(uploaders);
+			return copy;
+		}
 
 		public string Serialize(Formatting formatting = Formatting.Indented) => JsonConvert.SerializeObject(this, formatting);
 	}
