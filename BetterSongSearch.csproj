@@ -1,12 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <GameDirectory>D:\BSManager\BSInstances\1.45.1</GameDirectory>
+    <GameDirectory>D:\BSManager\BSInstances\1.45.2</GameDirectory>
     <TargetFramework>net48</TargetFramework>
     <OutputType>Library</OutputType>
     <LangVersion>10</LangVersion>
     <LegatoSourceVersion>1.45.1</LegatoSourceVersion>
-    <LegatoTargetVersion>1.45.1</LegatoTargetVersion>
+    <LegatoTargetVersion>1.45.2</LegatoTargetVersion>
     <LegatoReferenceRoot>$(GameDirectory)</LegatoReferenceRoot>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <RootNamespace>BetterSongSearch</RootNamespace>
@@ -51,7 +51,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="LegatoBS" Version="0.1.2-local.6" PrivateAssets="all" />
+    <PackageReference Include="LegatoBS" Version="0.1.2-local.7" PrivateAssets="all" />
     <Compile Remove="Util\MultithreadedBeatsaverDownloader.cs" />
   </ItemGroup>
 
