@@ -135,19 +135,20 @@ namespace BetterSongSearch.UI.SplitViews {
 					preparePublication = snapshot.PrepareSongPublication;
 				}
 				if(draft != null) {
-					var directory = manager.PlaylistPath;
 					var extension = handler.SupportsExtension(plist.SuggestedExtension) ? plist.SuggestedExtension : handler.DefaultExtension;
 					var fileName = plist.Filename;
-					var save = Task.Run(() => {
+					var save = manager.QueueFileOperation(directory => {
+						token.ThrowIfCancellationRequested();
 						var count = PopulatePlaylist(draft, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
 						token.ThrowIfCancellationRequested();
 						SavePlaylist(handler, draft, Path.Combine(directory, fileName + "." + extension));
 						return (Count: count, Publish: preparePublication());
-					}, token);
+					});
 					pendingSave = save;
 					var result = await save;
 					await UnityGame.SwitchToMainThreadAsync();
 					pendingSave = null;
+					await manager.WaitForFilePublicationAsync();
 					plist.SetCustomData("BetterSongSearchFilter", serializedFilter);
 					plist.SetCustomData("BetterSongSearchSearchTerm", searchTerm);
 					plist.SetCustomData("BetterSongSearchSort", sortMode);
@@ -156,6 +157,7 @@ namespace BetterSongSearch.UI.SplitViews {
 					manager.CompletePlaylistSave(plist);
 					addedSongs = result.Count;
 				} else {
+					await manager.WaitForFilePublicationAsync();
 					if(clear) plist.Clear();
 					addedSongs = PopulatePlaylist(plist, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
 					manager.StorePlaylist(plist);
