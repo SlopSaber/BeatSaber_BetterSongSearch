@@ -22,6 +22,8 @@ namespace BetterSongSearch.UI {
 		TableView downloadHistoryTable => downloadHistoryData?.TableView;
 		public readonly List<DownloadHistoryEntry> downloadList = new List<DownloadHistoryEntry>();
 		DownloadHistoryEntry[] downloadListSorted = Array.Empty<DownloadHistoryEntry>();
+		DownloadHistoryEntry[] pendingTable;
+		bool scrollToNewest;
 		int tableRevision;
 		bool sortingTable;
 
@@ -41,7 +43,7 @@ namespace BetterSongSearch.UI {
 			if(existingDLHistoryEntry == null) {
 				//var newPos = downloadList.FindLastIndex(x => x.status > DownloadHistoryEntry.DownloadStatus.Queued);
 				downloadList.Add(new DownloadHistoryEntry(song));
-				downloadHistoryTable.ScrollToCellWithIdx(0, TableView.ScrollPositionType.Beginning, false);
+				scrollToNewest = true;
 			} else {
 				existingDLHistoryEntry.status = DownloadHistoryEntry.DownloadStatus.Queued;
 			}
@@ -158,7 +160,7 @@ namespace BetterSongSearch.UI {
 					await UnityGame.SwitchToMainThreadAsync();
 					if(token.IsCancellationRequested || BSSFlowCoordinator.isClosing) return;
 					if(revision != tableRevision) continue;
-					downloadListSorted = sorted;
+					pendingTable = sorted;
 					SharedCoroutineStarter.instance.StartCoroutine(limitedFullTableReload.Call());
 				} while(revision != tableRevision);
 			} catch(OperationCanceledException) {
@@ -174,7 +176,17 @@ namespace BetterSongSearch.UI {
 
 		[UIAction("#post-parse")]
 		void Parsed() {
-			limitedFullTableReload = new RatelimitCoroutine(downloadHistoryTable.ReloadData, 0.1f);
+			limitedFullTableReload = new RatelimitCoroutine(() => {
+				if(pendingTable != null) {
+					downloadListSorted = pendingTable;
+					pendingTable = null;
+				}
+				downloadHistoryTable.ReloadData();
+				if(scrollToNewest && downloadListSorted.Length > 0) {
+					scrollToNewest = false;
+					downloadHistoryTable.ScrollToCellWithIdx(0, TableView.ScrollPositionType.Beginning, false);
+				}
+			}, 0.1f);
 			downloadHistoryTable.SetDataSource(this, false);
 
 			downloadHistoryTable._canSelectSelectedCell = true;
