@@ -137,7 +137,7 @@ namespace BetterSongSearch.UI.SplitViews {
 				if(draft != null) {
 					var extension = handler.SupportsExtension(plist.SuggestedExtension) ? plist.SuggestedExtension : handler.DefaultExtension;
 					var fileName = plist.Filename;
-					var save = manager.QueueFileOperation(directory => {
+					var save = manager.QueuePlaylistFileOperation(plist, directory => {
 						token.ThrowIfCancellationRequested();
 						var count = PopulatePlaylist(draft, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
 						token.ThrowIfCancellationRequested();
@@ -148,7 +148,7 @@ namespace BetterSongSearch.UI.SplitViews {
 					var result = await save;
 					await UnityGame.SwitchToMainThreadAsync();
 					pendingSave = null;
-					await manager.WaitForFilePublicationAsync();
+					await manager.WaitForPlaylistFilePublicationAsync(plist);
 					plist.SetCustomData("BetterSongSearchFilter", serializedFilter);
 					plist.SetCustomData("BetterSongSearchSearchTerm", searchTerm);
 					plist.SetCustomData("BetterSongSearchSort", sortMode);
@@ -157,7 +157,7 @@ namespace BetterSongSearch.UI.SplitViews {
 					manager.CompletePlaylistSave(plist);
 					addedSongs = result.Count;
 				} else {
-					await manager.WaitForFilePublicationAsync();
+					await manager.WaitForPlaylistFilePublicationAsync(plist);
 					if(clear) plist.Clear();
 					addedSongs = PopulatePlaylist(plist, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
 					manager.StorePlaylist(plist);
