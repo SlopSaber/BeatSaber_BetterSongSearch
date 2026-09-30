@@ -177,8 +177,8 @@ namespace BetterSongSearch.Util {
 
 			var cache = cachedSearchableStrings;
 			if(cache == null) {
-				Interlocked.CompareExchange(ref cachedSearchableStrings, new ConcurrentDictionary<string, string>(), null);
-				cache = cachedSearchableStrings;
+				var created = new ConcurrentDictionary<string, string>();
+				cache = Interlocked.CompareExchange(ref cachedSearchableStrings, created, null) ?? created;
 			}
 			return cache.GetOrAdd(s, Normalize);
 		}

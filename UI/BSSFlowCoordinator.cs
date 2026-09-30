@@ -39,51 +39,29 @@ namespace BetterSongSearch.UI {
 		public static SongSearchSong[] searchedSongsListPreallocatedArray { get; private set; } = null;
 
 		public static PlayerDataModel playerDataModel = null;
-		public static Dictionary<string, Dictionary<string, float>> _songsWithScores = null;
+		static Dictionary<string, Dictionary<string, float>> _songsWithScores = new Dictionary<string, Dictionary<string, float>>();
 		public static bool songsWithScoresShouldProbablyUpdate = true;
 
-		/*
-		 * With the control flow of BSS, this is always accessed off-main-thread when it does happen
-		 * to get populated / updated, so we can keep this on whatever thread it happens to get called from
-		 */
-		public static Dictionary<string, Dictionary<string, float>> songsWithScores {
-			get {
-				if(_songsWithScores == null || songsWithScoresShouldProbablyUpdate) {
-					_songsWithScores ??= new Dictionary<string, Dictionary<string, float>>();
-					songsWithScoresShouldProbablyUpdate = false;
+		public static Dictionary<string, Dictionary<string, float>> songsWithScores => Volatile.Read(ref _songsWithScores);
 
-					foreach(var x in playerDataModel.playerData.levelsStatsData) {
-						var lid = x.Key.levelId;
-						if(!x.Value.validScore || x.Value.highScore == 0 || lid.Length < 13 + 40 || !lid.StartsWith(CustomLevelLoader.kCustomLevelPrefixId, StringComparison.Ordinal))
-							continue;
-
-						var sh = lid.Substring(13, 40);
-
-						SongDetailsCache.Structs.Song song;
-						// local score level id's can be scuffed if you pass custom levels w/ no songcore installed
-						try {
-							if(!songDetails.songs.FindByHash(sh, out song))
-								continue;
-						} catch { continue; }
-
-						if(!song.GetDifficulty(out var diff, (SongDetailsCache.Structs.MapDifficulty)x.Key.difficulty))
-							continue;
-
-						if(!_songsWithScores.TryGetValue(sh, out var h))
-							_songsWithScores.Add(sh, h = new Dictionary<string, float>());
-
-						/*
-						 * Calculating the maxscore for a map is now a bajillion times more complex than it was before
-						 * bye bye sort by worst score
-						 */
-						//var maxScore = ScoreModel.MaxRawScoreForNumberOfNotes((int)diff.notes);
-						//h[$"{x.beatmapCharacteristic.serializedName}_{x.difficulty}"] = (x.highScore * 100f) / maxScore;
-				h[$"{x.Key.characteristic.SerializedName()}_{x.Key.difficulty}"] = 0;
-					}
-				}
-
-				return _songsWithScores;
+		static Dictionary<string, Dictionary<string, float>> BuildScoreLookup(
+			(string LevelId, bool ValidScore, int HighScore, SongDetailsCache.Structs.MapDifficulty Difficulty, string Characteristic)[] stats,
+			SongDetails details) {
+			var result = new Dictionary<string, Dictionary<string, float>>();
+			foreach(var x in stats) {
+				var lid = x.LevelId;
+				if(!x.ValidScore || x.HighScore == 0 || lid.Length < 13 + 40 || !lid.StartsWith(CustomLevelLoader.kCustomLevelPrefixId, StringComparison.Ordinal))
+					continue;
+				var hash = lid.Substring(13, 40);
+				SongDetailsCache.Structs.Song song;
+				try {
+					if(!details.songs.FindByHash(hash, out song)) continue;
+				} catch { continue; }
+				if(!song.GetDifficulty(out var diff, x.Difficulty)) continue;
+				if(!result.TryGetValue(hash, out var scores)) result.Add(hash, scores = new Dictionary<string, float>());
+				scores[$"{x.Characteristic}_{x.Difficulty}"] = 0;
 			}
+			return result;
 		}
 
 		public async override void DidActivate(bool firstActivation, bool addedToHierarchy, bool screenSystemEnabling) {
@@ -98,17 +76,14 @@ namespace BetterSongSearch.UI {
 
 			static async Task DataUpdated() {
 				var revision = Interlocked.Increment(ref datasetRevision);
+				await IPA.Utilities.UnityGame.SwitchToMainThreadAsync();
 				var details = songDetails;
-				if(instance == null || isClosing || details == null)
-					return;
-				await IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => songListView?.CancelSearch());
-				_ = IPA.Utilities.Async.UnityMainThreadTaskScheduler.Factory.StartNew(() => {
-					if(revision == datasetRevision && !isClosing && details.songs.Length > 0)
-						filterView?.datasetInfoLabel?.SetText($"{details.songs.Length} songs in dataset | Newest: {details.songs.Last().uploadTime.ToLocalTime():d\\. MMM yy - HH:mm}");
-				});
+				if(instance == null || isClosing || details == null) return;
+				songListView?.CancelSearch();
 
 			await dataProcessingSlot.WaitAsync();
 			try {
+				await IPA.Utilities.UnityGame.SwitchToMainThreadAsync();
 				if(revision != datasetRevision || isClosing)
 					return;
 				SongListController.filteredSongsList = null;
@@ -120,13 +95,21 @@ namespace BetterSongSearch.UI {
 							return null;
 						result[i] = new SongSearchSong(details.songs[i], details);
 					}
-					return result;
+					return new PreparedDataset {
+						Songs = result,
+						Filtered = new SongSearchSong[result.Length],
+						Searched = new SongSearchSong[result.Length],
+						Label = result.Length == 0 ? null : $"{result.Length} songs in dataset | Newest: {details.songs.Last().uploadTime.ToLocalTime():d\\. MMM yy - HH:mm}"
+					};
 			});
+				await IPA.Utilities.UnityGame.SwitchToMainThreadAsync();
 				if(nextSongs == null || revision != datasetRevision || isClosing)
 					return;
-				songsList = nextSongs;
-				filteredSongsListPreallocatedArray = new SongSearchSong[nextSongs.Length];
-				searchedSongsListPreallocatedArray = new SongSearchSong[nextSongs.Length];
+				songsWithScoresShouldProbablyUpdate = true;
+				songsList = nextSongs.Songs;
+				filteredSongsListPreallocatedArray = nextSongs.Filtered;
+				searchedSongsListPreallocatedArray = nextSongs.Searched;
+				if(nextSongs.Label != null) filterView?.datasetInfoLabel?.SetText(nextSongs.Label);
 			} finally {
 				dataProcessingSlot.Release();
 			}
@@ -250,6 +233,11 @@ namespace BetterSongSearch.UI {
 			}, ViewController.AnimationDirection.Horizontal, immediately);
 		}
 
+		sealed class PreparedDataset {
+			public SongSearchSong[] Songs, Filtered, Searched;
+			public string Label;
+		}
+
 		public override void BackButtonWasPressed(ViewController topViewController) => Close();
 
 		public static async void FilterSongs() {
@@ -265,6 +253,7 @@ namespace BetterSongSearch.UI {
 
 			await dataProcessingSlot.WaitAsync();
 			try {
+				await IPA.Utilities.UnityGame.SwitchToMainThreadAsync();
 				if(isClosing || revision != filterRevision || songsList == null || filteredSongsListPreallocatedArray == null)
 					return;
 			var sourceSongs = songsList;
@@ -273,7 +262,16 @@ namespace BetterSongSearch.UI {
 			var selectedFilter = FilterView.currentFilter.Clone();
 			selectedFilter.CalculateTagBitfields();
 			var sortMode = SongListController.selectedSortMode;
+			var scoreSnapshot = songsWithScoresShouldProbablyUpdate ? playerDataModel.playerData.levelsStatsData.Select(x => (
+				LevelId: x.Key.levelId, ValidScore: x.Value.validScore, HighScore: x.Value.highScore,
+				Difficulty: (SongDetailsCache.Structs.MapDifficulty)x.Key.difficulty,
+				Characteristic: x.Key.characteristic.SerializedName())).ToArray() : null;
 			var count = await Task.Run(() => {
+				if(scoreSnapshot != null) {
+					var scores = BuildScoreLookup(scoreSnapshot, sourceDetails);
+					if(revision != filterRevision || isClosing) return 0;
+					Volatile.Write(ref _songsWithScores, scores);
+				}
 				var sc = 0;
 
 				// Loop through our (custom) songdetails array
@@ -316,8 +314,10 @@ namespace BetterSongSearch.UI {
 
 				return sc;
 			});
+				await IPA.Utilities.UnityGame.SwitchToMainThreadAsync();
 				if(isClosing || revision != filterRevision || output != filteredSongsListPreallocatedArray)
 					return;
+				if(scoreSnapshot != null) songsWithScoresShouldProbablyUpdate = false;
 				SongListController.filteredSongsList = new ArraySegment<SongSearchSong>(output, 0, count);
 			} catch(Exception ex) {
 				Plugin.Log.Warn($"Filtering songs failed: {ex}");

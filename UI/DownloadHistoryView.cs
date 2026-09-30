@@ -10,6 +10,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using IPA.Utilities;
 using UnityEngine.UI;
 
 namespace BetterSongSearch.UI {
@@ -20,7 +21,9 @@ namespace BetterSongSearch.UI {
 		[UIComponent("downloadList")] CustomListTableData downloadHistoryData = null;
 		TableView downloadHistoryTable => downloadHistoryData?.TableView;
 		public readonly List<DownloadHistoryEntry> downloadList = new List<DownloadHistoryEntry>();
-		DownloadHistoryEntry[] downloadListSorted = null;
+		DownloadHistoryEntry[] downloadListSorted = Array.Empty<DownloadHistoryEntry>();
+		int tableRevision;
+		bool sortingTable;
 
 		public bool hasUnloadedDownloads => downloadList.Any(x => x.status == DownloadHistoryEntry.DownloadStatus.Downloaded);
 
@@ -139,8 +142,33 @@ namespace BetterSongSearch.UI {
 		RatelimitCoroutine limitedFullTableReload;
 
 		public void RefreshTable(bool fullReload = true) {
-			downloadListSorted = downloadList.OrderBy(x => x.orderValue).ToArray();
-			SharedCoroutineStarter.instance.StartCoroutine(limitedFullTableReload.Call());
+			tableRevision++;
+			if(!sortingTable) SortTable();
+		}
+
+		async void SortTable() {
+			sortingTable = true;
+			var revision = tableRevision;
+			try {
+				do {
+					revision = tableRevision;
+					var token = BSSFlowCoordinator.closeCancelSource.Token;
+					var entries = downloadList.Select(x => (Entry: x, Order: x.orderValue)).ToArray();
+					var sorted = await Task.Run(() => entries.OrderBy(x => x.Order).Select(x => x.Entry).ToArray(), token);
+					await UnityGame.SwitchToMainThreadAsync();
+					if(token.IsCancellationRequested || BSSFlowCoordinator.isClosing) return;
+					if(revision != tableRevision) continue;
+					downloadListSorted = sorted;
+					SharedCoroutineStarter.instance.StartCoroutine(limitedFullTableReload.Call());
+				} while(revision != tableRevision);
+			} catch(OperationCanceledException) {
+			} catch(Exception ex) {
+				Plugin.Log.Warn($"Sorting download history failed: {ex}");
+			} finally {
+				await UnityGame.SwitchToMainThreadAsync();
+				sortingTable = false;
+				if(revision != tableRevision && !BSSFlowCoordinator.isClosing) SortTable();
+			}
 		}
 
 
@@ -155,7 +183,7 @@ namespace BetterSongSearch.UI {
 		}
 
 		public float CellSize(int idx) => 8.05f;
-		public int NumberOfCells() => downloadList?.Count ?? 0;
+		public int NumberOfCells() => downloadListSorted.Length;
 
 		public TableCell CellForIdx(TableView tableView, int idx) => DownloadListTableData.GetCell(tableView).PopulateWithSongData(downloadListSorted[idx]);
 

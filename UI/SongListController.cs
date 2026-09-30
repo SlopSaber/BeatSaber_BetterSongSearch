@@ -83,8 +83,7 @@ namespace BetterSongSearch.UI {
 					return;
 
 				var wasEmpty = searchedSongsList == null;
-				Array.Copy(sorted, BSSFlowCoordinator.searchedSongsListPreallocatedArray, sorted.Length);
-				searchedSongsList = new ArraySegment<SongSearchSong>(BSSFlowCoordinator.searchedSongsListPreallocatedArray, 0, sorted.Length);
+				searchedSongsList = sorted;
 
 				songList.ReloadData();
 				if(songSearchPlaceholder != null)

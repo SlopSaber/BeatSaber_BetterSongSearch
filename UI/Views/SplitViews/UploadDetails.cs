@@ -3,6 +3,8 @@ using BetterSongSearch.Util;
 using HMUI;
 using System;
 using System.Linq;
+using System.Threading.Tasks;
+using IPA.Utilities;
 using TMPro;
 
 namespace BetterSongSearch.UI.SplitViews {
@@ -17,26 +19,42 @@ namespace BetterSongSearch.UI.SplitViews {
 		//[UIComponent("selectedDownloadCount")] TextMeshProUGUI selectedDownloadCount = null;
 		[UIComponent("songDetailsLoading")] readonly ImageView songDetailsLoading = null;
 
+		int revision;
 		public async void Populate(SongSearchSong selectedSong) {
-			selectedCharacteristics.text = String.Join(", ", selectedSong.detailsSong.difficulties.GroupBy(x => x.characteristic).Select(x => $"{x.Count()}x {x.Key}"));
-			selectedSongKey.text = selectedSong.detailsSong.key;
-			//selectedDownloadCount.text = selectedSong.detailsSong.downloadCount.ToString("N0");
-			selectedRating.text = selectedSong.detailsSong.rating.ToString("0.0%");
+			var request = ++revision;
+			var token = BSSFlowCoordinator.closeCancelSource.Token;
+			var loader = BSSFlowCoordinator.assetLoader;
+			var song = selectedSong.detailsSong;
 			selectedSongDescription.text = "Loading...";
-
 			songDetailsLoading.gameObject.SetActive(true);
-
-			string desc;
 			try {
-				desc = await BSSFlowCoordinator.assetLoader.GetSongDescription(selectedSong.detailsSong.key, BSSFlowCoordinator.closeCancelSource.Token);
-			} catch {
-				desc = "Failed to load description";
+				var info = await Task.Run(() => (
+					Characteristics: String.Join(", ", song.difficulties.GroupBy(x => x.characteristic).Select(x => $"{x.Count()}x {x.Key}")),
+					Key: song.key, Rating: song.rating.ToString("0.0%")), token);
+				await UnityGame.SwitchToMainThreadAsync();
+				if(request != revision || token.IsCancellationRequested || BSSFlowCoordinator.isClosing) return;
+				selectedCharacteristics.text = info.Characteristics;
+				selectedSongKey.text = info.Key;
+				selectedRating.text = info.Rating;
+				string desc;
+				try {
+					desc = await loader.GetSongDescription(info.Key, token);
+				} catch(OperationCanceledException) when(token.IsCancellationRequested) {
+					return;
+				} catch {
+					desc = "Failed to load description";
+				}
+				await UnityGame.SwitchToMainThreadAsync();
+				if(request != revision || token.IsCancellationRequested || BSSFlowCoordinator.isClosing) return;
+				songDetailsLoading.gameObject.SetActive(false);
+				selectedSongDescription.text = desc;
+				selectedSongDescription.gameObject.SetActive(false);
+				selectedSongDescription.gameObject.SetActive(true);
+			} catch(OperationCanceledException) when(token.IsCancellationRequested) {
+			} catch(Exception ex) {
+				Plugin.Log.Warn($"Preparing song details failed: {ex}");
 			}
-
-			songDetailsLoading.gameObject.SetActive(false);
-			selectedSongDescription.text = desc;
-			selectedSongDescription.gameObject.SetActive(false);
-			selectedSongDescription.gameObject.SetActive(true);
 		}
+
 	}
 }

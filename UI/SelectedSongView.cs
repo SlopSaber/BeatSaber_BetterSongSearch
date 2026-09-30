@@ -3,6 +3,8 @@ using BeatSaberMarkupLanguage.Parser;
 using BetterSongSearch.HarmonyPatches;
 using BetterSongSearch.Util;
 using HarmonyLib;
+using IPA.Utilities;
+using System;
 using HMUI;
 using System.Linq;
 using System.Reflection;
@@ -77,21 +79,7 @@ namespace BetterSongSearch.UI {
 
 			detailActionsHideUntilSongsAvailable.gameObject.SetActive(true);
 
-			if(song.diffs.Length > 1) {
-				selectedSongDiffInfo.text = string.Format(
-					"{0:0.00} - {1:0.00} NPS | {2:0.00} - {3:0.00} NJS",
-					(float)song.diffs.Min(x => x.detailsDiff.notes) / song.detailsSong.songDurationSeconds,
-					(float)song.diffs.Max(x => x.detailsDiff.notes) / song.detailsSong.songDurationSeconds,
-					song.diffs.Min(x => x.detailsDiff.njs),
-					song.diffs.Max(x => x.detailsDiff.njs)
-				);
-			} else if(song.diffs.Length > 0) {
-				selectedSongDiffInfo.text = string.Format(
-					"{0:0.00} NPS | {1:0.00} NJS",
-					(float)song.diffs[0].detailsDiff.notes / song.detailsSong.songDurationSeconds,
-					song.diffs[0].detailsDiff.njs
-				);
-			}
+			PrepareDiffInfo(song);
 
 			if(selectInTableIfPossible) {
 				var idx = SongListController.searchedSongsList.IndexOf(song);
@@ -152,6 +140,30 @@ namespace BetterSongSearch.UI {
 					ShowCoverLoader(false);
 			}
 			source.Dispose();
+		}
+
+		int diffInfoRevision;
+		async void PrepareDiffInfo(SongSearchSong song) {
+			var revision = ++diffInfoRevision;
+			selectedSongDiffInfo.text = "";
+			try {
+				var text = await Task.Run(() => {
+					if(song.diffs.Length > 1)
+						return string.Format("{0:0.00} - {1:0.00} NPS | {2:0.00} - {3:0.00} NJS",
+							(float)song.diffs.Min(x => x.detailsDiff.notes) / song.detailsSong.songDurationSeconds,
+							(float)song.diffs.Max(x => x.detailsDiff.notes) / song.detailsSong.songDurationSeconds,
+							song.diffs.Min(x => x.detailsDiff.njs), song.diffs.Max(x => x.detailsDiff.njs));
+					if(song.diffs.Length > 0)
+						return string.Format("{0:0.00} NPS | {1:0.00} NJS",
+							(float)song.diffs[0].detailsDiff.notes / song.detailsSong.songDurationSeconds, song.diffs[0].detailsDiff.njs);
+					return "";
+				});
+				await UnityGame.SwitchToMainThreadAsync();
+				if(this != null && revision == diffInfoRevision && selectedSong == song && !BSSFlowCoordinator.isClosing)
+					selectedSongDiffInfo.text = text;
+			} catch(Exception ex) {
+				Plugin.Log.Warn($"Preparing difficulty summary failed: {ex}");
+			}
 		}
 
 		internal void SetIsDownloaded(bool isDownloaded, bool downloadable = true) {

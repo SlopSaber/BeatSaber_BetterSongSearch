@@ -14,25 +14,26 @@ namespace BetterSongSearch.Util {
 
 		static bool didTheThing = false;
 
-		public static void RegionLookup(bool force = false) {
+		public static async void RegionLookup(bool force = false) {
 			if(didTheThing && !force)
 				return;
 
 			didTheThing = true;
 
-			Task.Run(async () => {
-				try {
-					var joe = await BSSFlowCoordinator.assetLoader.GetPreviewURL("225eb", CancellationToken.None);
+			var loader = BSSFlowCoordinator.assetLoader;
+			try {
+				var joe = await loader.GetPreviewURL("225eb", CancellationToken.None);
 
-					if(joe != null && joe.Length > 0) {
+				if(joe != null && joe.Length > 0) {
+					var baseUrl = await Task.Run(() => {
 						var u = new Uri(joe);
-
-						coverDownloadUrl = previewDownloadUrl = $"{u.Scheme}://{u.Host}";
-						return;
-					}
-				} catch { }
-				didTheThing = false;
-			});
+						return $"{u.Scheme}://{u.Host}";
+					});
+					coverDownloadUrl = previewDownloadUrl = baseUrl;
+					return;
+				}
+			} catch { }
+			didTheThing = false;
 		}
 	}
 }

@@ -89,6 +89,8 @@ namespace BetterSongSearch.UI.SplitViews {
 		[UIComponent("genreList")] readonly CustomCellListTableData genreList = null;
 		int reloadRevision;
 		internal async void Reload() {
+			await UnityGame.SwitchToMainThreadAsync();
+			if(BSSFlowCoordinator.isClosing || BSSFlowCoordinator.songDetails == null) return;
 			var revision = ++reloadRevision;
 			var included = FilterView.currentFilter._mapGenreBitfield;
 			var excluded = FilterView.currentFilter._mapGenreExcludeBitfield;

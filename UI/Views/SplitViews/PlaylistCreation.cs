@@ -3,6 +3,7 @@ using BeatSaberMarkupLanguage.Components.Settings;
 using BeatSaberMarkupLanguage.Parser;
 using BeatSaberPlaylistsLib;
 using BeatSaberPlaylistsLib.Types;
+using BeatSaberPlaylistsLib.Legacy;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -64,6 +65,8 @@ namespace BetterSongSearch.UI.SplitViews {
 			.ToDictionary(x => x, x => x.ToString());
 
 		bool creating;
+		Task pendingSave;
+		internal void Flush() => pendingSave?.GetAwaiter().GetResult();
 		async void CreatePlaylist() {
 			if(creating) return;
 			var fName = string.Concat(playlistName.Text.Split(Path.GetInvalidFileNameChars())).Trim();
@@ -81,10 +84,11 @@ namespace BetterSongSearch.UI.SplitViews {
 			var filter = FilterView.currentFilter.Clone();
 			var searchTerm = BSSFlowCoordinator.songListView.songSearchInput.text;
 			var sortMode = SongListController.selectedSortMode;
+			var token = BSSFlowCoordinator.closeCancelSource.Token;
 			try {
 				PreparedSong[] songs;
 				string serializedFilter;
-				await BSSFlowCoordinator.dataProcessingSlot.WaitAsync();
+				await BSSFlowCoordinator.dataProcessingSlot.WaitAsync(token);
 				try {
 					var results = SongListController.searchedSongsList;
 					var prepared = await Task.Run(() => {
@@ -97,78 +101,98 @@ namespace BetterSongSearch.UI.SplitViews {
 								: Array.Empty<(string, string)>()
 						}).ToArray();
 						return (entries, filter.Serialize(Newtonsoft.Json.Formatting.None));
-					});
+					}, token);
 					songs = prepared.Item1;
 					serializedFilter = prepared.Item2;
 				} finally {
 					BSSFlowCoordinator.dataProcessingSlot.Release();
 				}
 				await UnityGame.SwitchToMainThreadAsync();
-				if(BSSFlowCoordinator.isClosing) return;
-				var manager = PlaylistManager.DefaultManager.CreateChildManager("BetterSongSearch");
+				if(token.IsCancellationRequested || BSSFlowCoordinator.isClosing) return;
+				var root = await Task.Run(() => PlaylistManager.DefaultManager, token);
+				await UnityGame.SwitchToMainThreadAsync();
+				var manager = await root.CreateChildManagerAsync("BetterSongSearch");
+				await UnityGame.SwitchToMainThreadAsync();
+				if(token.IsCancellationRequested || BSSFlowCoordinator.isClosing) return;
 
 				if(!manager.TryGetPlaylist(fName, out var plist))
-					plist = manager.CreatePlaylist(
-						fName,
-						title,
-						"BetterSongSearch",
-						""
-					);
-
-				if(clear)
-					plist.Clear();
-
-				plist.SetCustomData("BetterSongSearchFilter", serializedFilter);
-				plist.SetCustomData("BetterSongSearchSearchTerm", searchTerm);
-				plist.SetCustomData("BetterSongSearchSort", sortMode);
-				// PlaylistLib duplicate check is O(n^2) - Not gud enough for batch-adding with thousands of entries, so we roll out own
-				plist.AllowDuplicates = true;
-
-				// PlaylistLib contains uppercase hashes, but in that case I dont have control over it and dont know if it might change
-				var songsAlreadyInPlaylist = plist.Select(x => x.Hash.ToUpperInvariant()).ToHashSet();
-
-				int addedSongs = 0;
-
-				for(var i = 0; i < songs.Length; i++) {
-					if(addedSongs >= limit)
-						break;
-
-					var s = songs[i];
-
-					PlaylistSong pls = null;
-					// SongDetails returns uppercase hashes
-					var uH = s.Hash;
-
-					if(!songsAlreadyInPlaylist.Contains(uH))
-						pls = (PlaylistSong)plist.Add(uH, s.Name, s.Key, s.Author);
-
-					if(pls == null)
-						continue;
-
-					songsAlreadyInPlaylist.Add(uH);
-
-					addedSongs++;
-
-					if(!highlight)
-						continue;
-
-					foreach(var x in s.Difficulties) {
-						pls.AddDifficulty(x.Item1, x.Item2);
-					}
+					plist = manager.CreatePlaylist(fName, title, "BetterSongSearch", "");
+				var handler = plist.SuggestedExtension != null ? manager.GetHandlerForExtension(plist.SuggestedExtension) : null;
+				handler ??= manager.GetHandlerForPlaylistType(plist.GetType());
+				int addedSongs;
+				if(plist.GetType() == typeof(LegacyPlaylist) && handler?.GetType() == typeof(LegacyPlaylistHandler)) {
+					var snapshot = ((LegacyPlaylist)plist).CaptureSnapshot(!clear);
+					var directory = manager.PlaylistPath;
+					var extension = handler.SupportsExtension(plist.SuggestedExtension) ? plist.SuggestedExtension : handler.DefaultExtension;
+					var fileName = plist.Filename;
+					var save = Task.Run(() => {
+						var count = PopulatePlaylist(snapshot.Playlist, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
+						token.ThrowIfCancellationRequested();
+						SavePlaylist(handler, snapshot.Playlist, Path.Combine(directory, fileName + "." + extension));
+						return (Count: count, Publish: snapshot.PrepareSongPublication());
+					}, token);
+					pendingSave = save;
+					var result = await save;
+					await UnityGame.SwitchToMainThreadAsync();
+					pendingSave = null;
+					plist.SetCustomData("BetterSongSearchFilter", serializedFilter);
+					plist.SetCustomData("BetterSongSearchSearchTerm", searchTerm);
+					plist.SetCustomData("BetterSongSearchSort", sortMode);
+					plist.AllowDuplicates = false;
+					result.Publish();
+					manager.CompletePlaylistSave(plist);
+					addedSongs = result.Count;
+				} else {
+					if(clear) plist.Clear();
+					addedSongs = PopulatePlaylist(plist, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
+					manager.StorePlaylist(plist);
 				}
-
-				plist.AllowDuplicates = false;
-				manager.StorePlaylist(plist);
 				manager.RequestRefresh("BetterSongSearch");
-
-				ShowResult($"Added <b><color=#CCC>{addedSongs}</color></b> Songs to Playlist <b><color=#CCC>{title}</color></b> (Contains {plist.Count} now)");
+				if(!token.IsCancellationRequested && !BSSFlowCoordinator.isClosing)
+					ShowResult($"Added <b><color=#CCC>{addedSongs}</color></b> Songs to Playlist <b><color=#CCC>{title}</color></b> (Contains {plist.Count} now)");
+			} catch(OperationCanceledException) {
 			} catch(Exception ex) {
-				ShowResult($"Playlist failed to Create: More details in log, {ex.GetType().Name}");
+				await UnityGame.SwitchToMainThreadAsync();
+				if(!token.IsCancellationRequested && !BSSFlowCoordinator.isClosing)
+					ShowResult($"Playlist failed to Create: More details in log, {ex.GetType().Name}");
 				Plugin.Log.Warn("Failed to create Playlist:");
 				Plugin.Log.Warn(ex);
 			} finally {
 				creating = false;
 			}
+		}
+
+		static void SavePlaylist(IPlaylistHandler handler, IPlaylist playlist, string destination) {
+			var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+			try {
+				handler.SerializeToFile(playlist, temporary);
+				if(File.Exists(destination)) File.Replace(temporary, destination, null);
+				else File.Move(temporary, destination);
+			} finally {
+				if(File.Exists(temporary)) File.Delete(temporary);
+			}
+		}
+
+		static int PopulatePlaylist(IPlaylist playlist, PreparedSong[] songs, float limit, bool highlight,
+			string serializedFilter, string searchTerm, string sortMode) {
+			playlist.SetCustomData("BetterSongSearchFilter", serializedFilter);
+			playlist.SetCustomData("BetterSongSearchSearchTerm", searchTerm);
+			playlist.SetCustomData("BetterSongSearchSort", sortMode);
+			playlist.AllowDuplicates = true;
+			var existing = new HashSet<string>(playlist.Where(x => x.Hash != null).Select(x => x.Hash), StringComparer.OrdinalIgnoreCase);
+			int added = 0;
+			foreach(var song in songs) {
+				if(added >= limit) break;
+				if(existing.Contains(song.Hash)) continue;
+				var entry = (PlaylistSong)playlist.Add(song.Hash, song.Name, song.Key, song.Author);
+				if(entry == null) continue;
+				existing.Add(song.Hash);
+				added++;
+				if(highlight)
+					foreach(var diff in song.Difficulties) entry.AddDifficulty(diff.Item1, diff.Item2);
+			}
+			playlist.AllowDuplicates = false;
+			return added;
 		}
 
 		sealed class PreparedSong {

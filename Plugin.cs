@@ -48,6 +48,12 @@ namespace BetterSongSearch {
 		[OnExit]
 		public void OnApplicationQuit() {
 			UI.BSSFlowCoordinator.DisposeSongCoreSubscription();
+			UI.BSSFlowCoordinator.closeCancelSource?.Cancel();
+			try {
+				PlaylistCreation.instance.Flush();
+			} catch(Exception ex) {
+				Log.Error($"Failed to flush playlist save: {ex}");
+			}
 			try {
 				FilterPresets.Flush();
 			} catch(Exception ex) {
