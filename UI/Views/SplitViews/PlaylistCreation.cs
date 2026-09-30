@@ -4,6 +4,7 @@ using BeatSaberMarkupLanguage.Parser;
 using BeatSaberPlaylistsLib;
 using BeatSaberPlaylistsLib.Types;
 using BeatSaberPlaylistsLib.Legacy;
+using BeatSaberPlaylistsLib.Blist;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -120,16 +121,28 @@ namespace BetterSongSearch.UI.SplitViews {
 				var handler = plist.SuggestedExtension != null ? manager.GetHandlerForExtension(plist.SuggestedExtension) : null;
 				handler ??= manager.GetHandlerForPlaylistType(plist.GetType());
 				int addedSongs;
-				if(plist.GetType() == typeof(LegacyPlaylist) && handler?.GetType() == typeof(LegacyPlaylistHandler)) {
+				IPlaylist draft = null;
+				Func<Action> preparePublication = null;
+				if(plist.GetType() == typeof(LegacyPlaylist) && handler?.GetType() == typeof(LegacyPlaylistHandler)
+					&& (clear || plist.All(song => song.GetType() == typeof(LegacyPlaylistSong)))) {
 					var snapshot = ((LegacyPlaylist)plist).CaptureSnapshot(!clear);
+					draft = snapshot.Playlist;
+					preparePublication = snapshot.PrepareSongPublication;
+				} else if(plist.GetType() == typeof(BlistPlaylist) && handler?.GetType() == typeof(BlistPlaylistHandler)
+					&& (clear || plist.All(song => song.GetType() == typeof(BlistPlaylistSong)))) {
+					var snapshot = ((BlistPlaylist)plist).CaptureSnapshot(!clear);
+					draft = snapshot.Playlist;
+					preparePublication = snapshot.PrepareSongPublication;
+				}
+				if(draft != null) {
 					var directory = manager.PlaylistPath;
 					var extension = handler.SupportsExtension(plist.SuggestedExtension) ? plist.SuggestedExtension : handler.DefaultExtension;
 					var fileName = plist.Filename;
 					var save = Task.Run(() => {
-						var count = PopulatePlaylist(snapshot.Playlist, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
+						var count = PopulatePlaylist(draft, songs, limit, highlight, serializedFilter, searchTerm, sortMode);
 						token.ThrowIfCancellationRequested();
-						SavePlaylist(handler, snapshot.Playlist, Path.Combine(directory, fileName + "." + extension));
-						return (Count: count, Publish: snapshot.PrepareSongPublication());
+						SavePlaylist(handler, draft, Path.Combine(directory, fileName + "." + extension));
+						return (Count: count, Publish: preparePublication());
 					}, token);
 					pendingSave = save;
 					var result = await save;
