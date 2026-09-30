@@ -1,5 +1,7 @@
 ﻿using BetterSongSearch.UI.SplitViews;
 using HarmonyLib;
+using BetterSongSearch.Configuration;
+using System;
 using IPA;
 using IPA.Config;
 using IPA.Config.Stores;
@@ -26,7 +28,16 @@ namespace BetterSongSearch {
 
 		[OnStart]
 		public void OnApplicationStart() {
+			WarmPresets();
 			BeatSaberMarkupLanguage.Util.MainMenuAwaiter.MainMenuInitializing += MainMenuInit;
+		}
+
+		static async void WarmPresets() {
+			try {
+				await FilterPresets.InitAsync();
+			} catch(Exception ex) {
+				Log.Error($"Failed to prepare filter presets: {ex}");
+			}
 		}
 
 		public void MainMenuInit() {
@@ -37,6 +48,11 @@ namespace BetterSongSearch {
 		[OnExit]
 		public void OnApplicationQuit() {
 			UI.BSSFlowCoordinator.DisposeSongCoreSubscription();
+			try {
+				FilterPresets.Flush();
+			} catch(Exception ex) {
+				Log.Error($"Failed to flush filter presets: {ex}");
+			}
 		}
 	}
 }

@@ -7,6 +7,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
+using IPA.Utilities;
+using BetterSongSearch.Configuration;
 using TMPro;
 
 namespace BetterSongSearch.UI.SplitViews {
@@ -60,7 +63,9 @@ namespace BetterSongSearch.UI.SplitViews {
 			.Cast<SongDetailsCache.Structs.MapDifficulty>()
 			.ToDictionary(x => x, x => x.ToString());
 
-		void CreatePlaylist() {
+		bool creating;
+		async void CreatePlaylist() {
+			if(creating) return;
 			var fName = string.Concat(playlistName.Text.Split(Path.GetInvalidFileNameChars())).Trim();
 
 			if(fName.Length == 0) {
@@ -68,23 +73,54 @@ namespace BetterSongSearch.UI.SplitViews {
 				return;
 			}
 
+			creating = true;
+			var title = playlistName.Text;
+			var clear = clearExisting;
+			var highlight = hightlightDiffs;
+			var limit = playlistSongsCountSlider.Value;
+			var filter = FilterView.currentFilter.Clone();
+			var searchTerm = BSSFlowCoordinator.songListView.songSearchInput.text;
+			var sortMode = SongListController.selectedSortMode;
 			try {
+				PreparedSong[] songs;
+				string serializedFilter;
+				await BSSFlowCoordinator.dataProcessingSlot.WaitAsync();
+				try {
+					var results = SongListController.searchedSongsList;
+					var prepared = await Task.Run(() => {
+						var entries = results.Select(s => new PreparedSong {
+							Hash = s.hash, Name = s.detailsSong.songName, Key = s.detailsSong.key,
+							Author = s.detailsSong.levelAuthorName,
+							Difficulties = highlight ? s.diffs.Where(x => x.passesFilter)
+								.Select(x => (songDetailsCharNames[x.detailsDiff.characteristic],
+									songDetailsDiffNames[x.detailsDiff.difficulty])).ToArray()
+								: Array.Empty<(string, string)>()
+						}).ToArray();
+						return (entries, filter.Serialize(Newtonsoft.Json.Formatting.None));
+					});
+					songs = prepared.Item1;
+					serializedFilter = prepared.Item2;
+				} finally {
+					BSSFlowCoordinator.dataProcessingSlot.Release();
+				}
+				await UnityGame.SwitchToMainThreadAsync();
+				if(BSSFlowCoordinator.isClosing) return;
 				var manager = PlaylistManager.DefaultManager.CreateChildManager("BetterSongSearch");
 
 				if(!manager.TryGetPlaylist(fName, out var plist))
 					plist = manager.CreatePlaylist(
 						fName,
-						playlistName.Text,
+						title,
 						"BetterSongSearch",
 						""
 					);
 
-				if(clearExisting)
+				if(clear)
 					plist.Clear();
 
-				plist.SetCustomData("BetterSongSearchFilter", FilterView.currentFilter.Serialize(Newtonsoft.Json.Formatting.None));
-				plist.SetCustomData("BetterSongSearchSearchTerm", BSSFlowCoordinator.songListView.songSearchInput.text);
-				plist.SetCustomData("BetterSongSearchSort", SongListController.selectedSortMode);
+				plist.SetCustomData("BetterSongSearchFilter", serializedFilter);
+				plist.SetCustomData("BetterSongSearchSearchTerm", searchTerm);
+				plist.SetCustomData("BetterSongSearchSort", sortMode);
 				// PlaylistLib duplicate check is O(n^2) - Not gud enough for batch-adding with thousands of entries, so we roll out own
 				plist.AllowDuplicates = true;
 
@@ -93,18 +129,18 @@ namespace BetterSongSearch.UI.SplitViews {
 
 				int addedSongs = 0;
 
-				for(var i = 0; i < SongListController.searchedSongsList.Count; i++) {
-					if(addedSongs >= playlistSongsCountSlider.Value)
+				for(var i = 0; i < songs.Length; i++) {
+					if(addedSongs >= limit)
 						break;
 
-					var s = SongListController.searchedSongsList[i];
+					var s = songs[i];
 
 					PlaylistSong pls = null;
 					// SongDetails returns uppercase hashes
-					var uH = s.hash;
+					var uH = s.Hash;
 
 					if(!songsAlreadyInPlaylist.Contains(uH))
-						pls = (PlaylistSong)plist.Add(uH, s.detailsSong.songName, s.detailsSong.key, s.detailsSong.levelAuthorName);
+						pls = (PlaylistSong)plist.Add(uH, s.Name, s.Key, s.Author);
 
 					if(pls == null)
 						continue;
@@ -113,17 +149,11 @@ namespace BetterSongSearch.UI.SplitViews {
 
 					addedSongs++;
 
-					if(!hightlightDiffs)
+					if(!highlight)
 						continue;
 
-					foreach(var x in s.diffs) {
-						if(!x.passesFilter)
-							continue;
-
-						pls.AddDifficulty(
-							songDetailsCharNames[x.detailsDiff.characteristic],
-							songDetailsDiffNames[x.detailsDiff.difficulty]
-						);
+					foreach(var x in s.Difficulties) {
+						pls.AddDifficulty(x.Item1, x.Item2);
 					}
 				}
 
@@ -131,12 +161,19 @@ namespace BetterSongSearch.UI.SplitViews {
 				manager.StorePlaylist(plist);
 				manager.RequestRefresh("BetterSongSearch");
 
-				ShowResult($"Added <b><color=#CCC>{addedSongs}</color></b> Songs to Playlist <b><color=#CCC>{playlistName.Text}</color></b> (Contains {plist.Count} now)");
+				ShowResult($"Added <b><color=#CCC>{addedSongs}</color></b> Songs to Playlist <b><color=#CCC>{title}</color></b> (Contains {plist.Count} now)");
 			} catch(Exception ex) {
 				ShowResult($"Playlist failed to Create: More details in log, {ex.GetType().Name}");
 				Plugin.Log.Warn("Failed to create Playlist:");
 				Plugin.Log.Warn(ex);
+			} finally {
+				creating = false;
 			}
+		}
+
+		sealed class PreparedSong {
+			public string Hash, Name, Key, Author;
+			public (string, string)[] Difficulties;
 		}
 	}
 }

@@ -24,6 +24,7 @@ namespace BetterSongSearch.UI {
 		internal static readonly SemaphoreSlim dataProcessingSlot = new SemaphoreSlim(1, 1);
 		static int filterRevision;
 		static int datasetRevision;
+		internal static int DatasetRevision => Volatile.Read(ref datasetRevision);
 		internal static bool isClosing { get; private set; }
 
 		internal static void DisposeSongCoreSubscription() {

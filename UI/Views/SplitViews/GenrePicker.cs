@@ -6,6 +6,8 @@ using BetterSongSearch.Util;
 using HMUI;
 using IPA.Utilities;
 using System.Collections.Generic;
+using System;
+using System.Threading.Tasks;
 using System.Linq;
 using TMPro;
 using UnityEngine;
@@ -31,7 +33,7 @@ namespace BetterSongSearch.UI.SplitViews {
 			[UIComponent("excludeButton")] readonly ClickableText excludeButton = null;
 			[UIComponent("includeButton")] readonly ClickableText includeButton = null;
 
-			public FilterPresetRow(KeyValuePair<string, ulong> tag, int count) {
+			public FilterPresetRow(KeyValuePair<string, ulong> tag, int count, ulong included, ulong excluded) {
 				this.value = tag.Value;
 				this.name = tag.Key;
 
@@ -40,8 +42,8 @@ namespace BetterSongSearch.UI.SplitViews {
 				this.mappedName += $" ({count})";
 
 				this.selectionState =
-					(FilterView.currentFilter._mapGenreBitfield & this.value) != 0 ? State.Include :
-					(FilterView.currentFilter._mapGenreExcludeBitfield & this.value) != 0 ? State.Exclude :
+					(included & this.value) != 0 ? State.Include :
+					(excluded & this.value) != 0 ? State.Exclude :
 					State.None;
 			}
 
@@ -85,30 +87,59 @@ namespace BetterSongSearch.UI.SplitViews {
 
 
 		[UIComponent("genreList")] readonly CustomCellListTableData genreList = null;
-		internal void Reload() {
-			var tagCounts = new Dictionary<ulong, int>();
-			var songs = BSSFlowCoordinator.songDetails.songs;
-			for(var i = 0; i < songs.Length; i++) {
-				for(var bits = songs[i].tags; bits != 0; bits &= bits - 1) {
-					var bit = bits & (~bits + 1);
-					tagCounts.TryGetValue(bit, out var count);
-					tagCounts[bit] = count + 1;
+		int reloadRevision;
+		internal async void Reload() {
+			var revision = ++reloadRevision;
+			var included = FilterView.currentFilter._mapGenreBitfield;
+			var excluded = FilterView.currentFilter._mapGenreExcludeBitfield;
+			var token = BSSFlowCoordinator.closeCancelSource.Token;
+			try {
+				List<object> rows;
+				int dataset;
+				await BSSFlowCoordinator.dataProcessingSlot.WaitAsync(token);
+				try {
+					dataset = BSSFlowCoordinator.DatasetRevision;
+					var details = BSSFlowCoordinator.songDetails;
+					var songs = details.songs;
+					var tags = details.tags.ToArray();
+					rows = await Task.Run(() => {
+						var tagCounts = new Dictionary<ulong, int>();
+						for(var i = 0; i < songs.Length; i++) {
+							if((i & 255) == 0) token.ThrowIfCancellationRequested();
+							for(var bits = songs[i].tags; bits != 0; bits &= bits - 1) {
+								var bit = bits & (~bits + 1);
+								tagCounts.TryGetValue(bit, out var count);
+								tagCounts[bit] = count + 1;
+							}
+						}
+						return tags
+							.Where(x => !FilterOptions.mapStyles.Contains(x.Key))
+							.OrderBy(x => x.Key)
+							.Select(x => {
+								if(!tagCounts.TryGetValue(x.Value, out var count) && (x.Value & (x.Value - 1)) != 0) {
+									for(var i = 0; i < songs.Length; i++)
+										if((songs[i].tags & x.Value) != 0)
+											count++;
+								}
+								return new FilterPresetRow(x, count, included, excluded);
+							}).ToList<object>();
+					}, token);
+				} finally {
+					BSSFlowCoordinator.dataProcessingSlot.Release();
 				}
+				await UnityGame.SwitchToMainThreadAsync();
+				if(token.IsCancellationRequested || revision != reloadRevision || BSSFlowCoordinator.isClosing) return;
+				if(dataset != BSSFlowCoordinator.DatasetRevision) {
+					Reload();
+					return;
+				}
+				genreList.Data = rows;
+				genreList.TableView.ReloadData();
+				genreList.TableView.ClearSelection();
+			} catch(OperationCanceledException) when (token.IsCancellationRequested) {
+			} catch(Exception ex) {
+				Plugin.Log.Error($"Failed to prepare genre list: {ex}");
 			}
-			genreList.Data = BSSFlowCoordinator.songDetails.tags
-				.Where(x => !FilterOptions.mapStyles.Contains(x.Key))
-				.OrderBy(x => x.Key)
-				.Select(x => {
-					if(!tagCounts.TryGetValue(x.Value, out var count) && (x.Value & (x.Value - 1)) != 0) {
-						for(var i = 0; i < songs.Length; i++)
-							if((songs[i].tags & x.Value) != 0)
-								count++;
-					}
-					return new FilterPresetRow(x, count);
-				}).ToList<object>();
-
-			genreList.TableView.ReloadData();
-			genreList.TableView.ClearSelection();
 		}
 
 		void GenreSelected(object _, FilterPresetRow row) { }

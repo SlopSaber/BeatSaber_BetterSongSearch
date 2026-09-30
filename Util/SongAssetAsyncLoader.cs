@@ -33,11 +33,12 @@ namespace BetterSongSearch.Util {
 
 			var c = await UnityWebrequestWrapper.DownloadBytes($"{baseUrl}/{key.ToLowerInvariant()}", token);
 			
-			using(var jsonReader = new JsonTextReader(new StreamReader(new MemoryStream(c)))) {
-				var ser = new JsonSerializer();
-
-				return valueGetter(ser.Deserialize<JObject>(jsonReader));
-			}
+			return await Task.Run(() => {
+				using(var jsonReader = new JsonTextReader(new StreamReader(new MemoryStream(c)))) {
+					var ser = new JsonSerializer();
+					return valueGetter(ser.Deserialize<JObject>(jsonReader));
+				}
+			}, token);
 		}
 
 		public Task<string> GetSongDescription(string key, CancellationToken token) {

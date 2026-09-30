@@ -4,7 +4,10 @@ using BeatSaberMarkupLanguage.Components.Settings;
 using BetterSongSearch.Configuration;
 using BetterSongSearch.Util;
 using HMUI;
+using IPA.Utilities.Async;
+using System;
 using System.Linq;
+using System.Threading.Tasks;
 using TMPro;
 using UnityEngine.UI;
 
@@ -32,8 +35,6 @@ namespace BetterSongSearch.UI.SplitViews {
 
 		[UIAction("#post-parse")]
 		void Parsed() {
-			FilterPresets.Init();
-
 			// BSML / HMUI my beloved
 			newPresetName.ModalKeyboard.ModalView._animateParentCanvas = false;
 		}
@@ -43,15 +44,30 @@ namespace BetterSongSearch.UI.SplitViews {
 		[UIComponent("deleteButton")] readonly NoTransitionsButton deleteButton = null;
 		[UIComponent("presetList")] readonly CustomCellListTableData presetList = null;
 		[UIComponent("newPresetName")] readonly StringSetting newPresetName = null;
-		internal void ReloadPresets() {
-			presetList.Data = FilterPresets.presets.Select(x => new FilterPresetRow(x.Key)).ToList<object>();
-			presetList.TableView.ReloadData();
-			presetList.TableView.ClearSelection();
+		int reloadRevision;
+		internal async void ReloadPresets() {
+			try {
+				await ReloadPresetsAsync();
+			} catch(Exception ex) {
+				Plugin.Log.Error($"Failed to load filter presets: {ex}");
+			}
+		}
 
+		async Task ReloadPresetsAsync() {
+			var revision = ++reloadRevision;
 			loadButton.interactable = false;
 			deleteButton.interactable = false;
-
-			newPresetName.Text = "";
+			await FilterPresets.InitAsync();
+			var snapshot = FilterPresets.presets;
+			var rows = await Task.Run(() => snapshot.Select(x => new FilterPresetRow(x.Key)).ToList<object>());
+			await UnityMainThreadTaskScheduler.Factory.StartNew(() => {
+				if(revision != reloadRevision || BSSFlowCoordinator.isClosing) return;
+				presetList.Data = rows;
+				presetList.TableView.ReloadData();
+				presetList.TableView.ClearSelection();
+				curSelected = null;
+				newPresetName.Text = "";
+			});
 		}
 
 		string curSelected;
@@ -61,19 +77,34 @@ namespace BetterSongSearch.UI.SplitViews {
 			newPresetName.Text = curSelected = row.name;
 		}
 
-		void AddPreset() {
-			FilterPresets.Save(newPresetName.Text);
-			ReloadPresets();
+		async void AddPreset() {
+			var name = newPresetName.Text;
+			var filter = FilterView.currentFilter.Clone();
+			try {
+				await FilterPresets.SaveAsync(name, filter);
+				await ReloadPresetsAsync();
+			} catch(Exception ex) {
+				Plugin.Log.Error($"Failed to save filter preset: {ex}");
+			}
 		}
 
 		void LoadPreset() {
 			PlaylistCreation.nameToUseOnNextOpen = curSelected;
 
-			BSSFlowCoordinator.filterView.SetFilter(FilterPresets.presets[curSelected]);
+			if(curSelected != null && FilterPresets.presets.TryGetValue(curSelected, out var preset))
+				BSSFlowCoordinator.filterView.SetFilter(preset.Clone());
 		}
-		void DeletePreset() {
-			FilterPresets.Delete(curSelected);
-			ReloadPresets();
+		async void DeletePreset() {
+			var name = curSelected;
+			if(name == null) return;
+			loadButton.interactable = false;
+			deleteButton.interactable = false;
+			try {
+				await FilterPresets.DeleteAsync(name);
+				await ReloadPresetsAsync();
+			} catch(Exception ex) {
+				Plugin.Log.Error($"Failed to delete filter preset: {ex}");
+			}
 		}
 	}
 }

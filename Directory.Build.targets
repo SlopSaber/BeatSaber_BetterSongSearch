@@ -73,7 +73,7 @@
 		<ZipDir SourceDirectory="$(ArtifactDestination)" DestinationFile="$(DestinationDirectory)$(ArtifactName).zip" />
 	</Target>
 	<!--Copies the assembly to the Beat Saber folder.-->
-	<Target Name="CopyToPlugins" AfterTargets="Build" Condition="'$(DisableCopyToPlugins)' != 'True' AND '$(ContinuousIntegrationBuild)' != 'True'">
+	<Target Name="CopyToPlugins" AfterTargets="Build" Condition="'$(DisableCopyToPlugins)' != 'True' AND '$(DisableCopyToGame)' != 'True' AND '$(ContinuousIntegrationBuild)' != 'True'">
 		<PropertyGroup>
 			<PluginDir>$(GameDirectory)\Plugins</PluginDir>
 			<CanCopyToPlugins>True</CanCopyToPlugins>

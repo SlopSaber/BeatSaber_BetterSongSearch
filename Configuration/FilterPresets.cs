@@ -10,6 +10,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace BetterSongSearch.Configuration {
@@ -200,50 +202,74 @@ namespace BetterSongSearch.Configuration {
 	}
 
 	static class FilterPresets {
-		public static Dictionary<string, FilterOptions> presets { get; private set; }
+		static readonly object queueLock = new object();
+		static Task pending = Task.CompletedTask;
+		static Task initialization;
+		static Dictionary<string, FilterOptions> snapshot = new Dictionary<string, FilterOptions>();
+		public static Dictionary<string, FilterOptions> presets => Volatile.Read(ref snapshot);
 
-		public static void Init() {
-			if(!Directory.Exists(ConfigUtil.PresetDir))
-				Directory.CreateDirectory(ConfigUtil.PresetDir);
+		public static Task InitAsync() {
+			var directory = ConfigUtil.PresetDir;
+			lock(queueLock) {
+				if(initialization == null || initialization.IsFaulted)
+					initialization = Enqueue(() => Load(directory));
+				return initialization;
+			}
+		}
 
-			if(presets != null)
-				return;
+		static Task Enqueue(Action action) {
+			lock(queueLock) {
+				return pending = pending.ContinueWith(_ => action(), CancellationToken.None,
+					TaskContinuationOptions.None, TaskScheduler.Default);
+			}
+		}
 
-			presets = new Dictionary<string, FilterOptions>();
+		static void Load(string directory) {
+			Directory.CreateDirectory(directory);
+			var loaded = new Dictionary<string, FilterOptions>();
 
-			foreach(var preset in Directory.GetFiles(ConfigUtil.PresetDir, "*.json")) {
+			foreach(var preset in Directory.GetFiles(directory, "*.json")) {
 				try {
-					presets.Add(Path.GetFileNameWithoutExtension(preset), JsonConvert.DeserializeObject<FilterOptions>(File.ReadAllText(preset), JsonHelpers.leanDeserializeSettings));
+					loaded.Add(Path.GetFileNameWithoutExtension(preset), JsonConvert.DeserializeObject<FilterOptions>(File.ReadAllText(preset), JsonHelpers.leanDeserializeSettings));
 				} catch(Exception ex) {
 					Plugin.Log.Warn($"Failed to load Filter preset {Path.GetFileName(preset)}");
 					Plugin.Log.Error(ex);
 				}
 			}
+			Volatile.Write(ref snapshot, loaded);
 		}
 
-		public static void Save(string name) {
-			if(!Directory.Exists(ConfigUtil.PresetDir))
+		public static Task SaveAsync(string name, FilterOptions filter) {
+			var ready = InitAsync();
+			return Enqueue(() => {
+				ready.GetAwaiter().GetResult();
 				Directory.CreateDirectory(ConfigUtil.PresetDir);
-
-			name = string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim();
-
-			name = presets.Keys.FirstOrDefault(x => x.Equals(name, StringComparison.InvariantCultureIgnoreCase)) ?? name;
-
-			if(name.Length == 0)
-				name = "Unnamed";
-
-			presets[name] = FilterView.currentFilter.Clone();
-
-			File.WriteAllText(ConfigUtil.GetPresetPath(name), FilterView.currentFilter.Serialize());
+				name = string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim();
+				var next = new Dictionary<string, FilterOptions>(presets);
+				name = next.Keys.FirstOrDefault(x => x.Equals(name, StringComparison.InvariantCultureIgnoreCase)) ?? name;
+				if(name.Length == 0) name = "Unnamed";
+				File.WriteAllText(ConfigUtil.GetPresetPath(name), filter.Serialize());
+				next[name] = filter;
+				Volatile.Write(ref snapshot, next);
+			});
 		}
 
-		public static void Delete(string name) {
-			if(!presets.ContainsKey(name))
-				return;
+		public static Task DeleteAsync(string name) {
+			var ready = InitAsync();
+			return Enqueue(() => {
+				ready.GetAwaiter().GetResult();
+				var next = new Dictionary<string, FilterOptions>(presets);
+				if(!next.ContainsKey(name)) return;
+				File.Delete(ConfigUtil.GetPresetPath(name));
+				next.Remove(name);
+				Volatile.Write(ref snapshot, next);
+			});
+		}
 
-			presets.Remove(name);
-
-			File.Delete(ConfigUtil.GetPresetPath(name));
+		internal static void Flush() {
+			Task last;
+			lock(queueLock) last = pending;
+			last.GetAwaiter().GetResult();
 		}
 	}
 }
